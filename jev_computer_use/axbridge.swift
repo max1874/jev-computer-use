@@ -776,6 +776,16 @@ func pressMenuPath(_ app: NSRunningApplication, _ path: String) throws -> String
 /// Execute one operation. The guard is scoped on purpose: the element at the
 /// path must still be the element the decision was made about. Unrelated parts
 /// of the window are allowed to have changed.
+func focusFacts(_ before: pid_t, _ app: NSRunningApplication) -> [String: Any] {
+    let after = frontmostPID()
+    return [
+        "frontmost_before": Int(before),
+        "frontmost_after": Int(after),
+        // True only if this operation is what brought the app forward.
+        "took_focus": before != app.processIdentifier && after == app.processIdentifier,
+    ]
+}
+
 func execute(_ request: [String: Any]) throws -> [String: Any] {
     guard let appName = request["app"] as? String, let op = request["op"] as? String else {
         throw BridgeError(message: "act needs app and op")
@@ -786,15 +796,19 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
     // Menu titles and enabled states are revalidated by the app itself; any
     // operation can change them ("Make Rich Text" becomes "Make Plain Text").
     menuCache[pid] = nil
+    // Whether this operation took the screen is a fact about what happened,
+    // not a promise about what should happen. Record it either side so the
+    // claim can be checked instead of believed.
+    let focusBefore = frontmostPID()
 
     if op == "MENU" {
         guard let path = request["menu"] as? String else { throw BridgeError(message: "MENU needs a menu path") }
-        return ["ok": true, "detail": try pressMenuPath(app, path), "mechanism": "AXPress(menu)"]
+        return ["ok": true, "detail": try pressMenuPath(app, path), "mechanism": "AXPress(menu)"].merging(focusFacts(focusBefore, app)) { a, _ in a }.merging(focusFacts(focusBefore, app)) { a, _ in a }
     }
     if op == "KEY" {
         guard let combo = request["key"] as? String else { throw BridgeError(message: "KEY needs a combo") }
         try pressKey(combo, pid: pid)
-        return ["ok": true, "detail": "key \(combo)", "mechanism": "CGEvent→pid"]
+        return ["ok": true, "detail": "key \(combo)", "mechanism": "CGEvent→pid"].merging(focusFacts(focusBefore, app)) { a, _ in a }
     }
     if op == "CLICK_POINT" {
         guard let x = request["x"] as? Double, let y = request["y"] as? Double,
@@ -810,7 +824,7 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         // own focus is, which is why this needs a visible confirmation after.
         guard let text = request["text"] as? String else { throw BridgeError(message: "TYPE_KEYS needs text") }
         typeText(text, pid: pid)
-        return ["ok": true, "detail": "typed \(text.count) characters", "mechanism": "CGEvent→pid (blind)"]
+        return ["ok": true, "detail": "typed \(text.count) characters", "mechanism": "CGEvent→pid (blind)"].merging(focusFacts(focusBefore, app)) { a, _ in a }
     }
     if op == "SCROLL_UP" || op == "SCROLL_DOWN" {
         let root = appElement(app)
@@ -820,7 +834,7 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
             throw BridgeError(message: "no scrollable area found")
         }
         try scroll(area, pid: pid, amount: op == "SCROLL_UP" ? 240 : -240)
-        return ["ok": true, "detail": op.lowercased(), "mechanism": "CGEvent→pid"]
+        return ["ok": true, "detail": op.lowercased(), "mechanism": "CGEvent→pid"].merging(focusFacts(focusBefore, app)) { a, _ in a }
     }
 
     guard let path = request["path"] as? String else { throw BridgeError(message: "\(op) needs an element path") }
@@ -864,12 +878,12 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         }
         let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
         guard result == .success else { throw BridgeError(message: "press failed: AXError \(result.rawValue)") }
-        return ["ok": true, "detail": current, "mechanism": "AXPress"]
+        return ["ok": true, "detail": current, "mechanism": "AXPress"].merging(focusFacts(focusBefore, app)) { a, _ in a }
     case "INCREMENT", "DECREMENT":
         let action = op == "INCREMENT" ? kAXIncrementAction : kAXDecrementAction
         let result = AXUIElementPerformAction(element, action as CFString)
         guard result == .success else { throw BridgeError(message: "\(op) failed: AXError \(result.rawValue)") }
-        return ["ok": true, "detail": current, "mechanism": action]
+        return ["ok": true, "detail": current, "mechanism": action].merging(focusFacts(focusBefore, app)) { a, _ in a }
     case "TYPE_TEXT":
         guard let text = request["text"] as? String else { throw BridgeError(message: "TYPE_TEXT needs text") }
         // This operation means "replace the whole value". Writing the value is
@@ -898,7 +912,7 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         let settled = after.trimmingCharacters(in: .whitespacesAndNewlines)
         let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if settled == wanted {
-            return ["ok": true, "detail": describe(element), "mechanism": mechanism, "verified": true]
+            return ["ok": true, "detail": describe(element), "mechanism": mechanism, "verified": true].merging(focusFacts(focusBefore, app)) { a, _ in a }
         }
         // Some fields expose no readable value at all. That is not a failure,
         // but it is not confirmation either, and the caller must be told which.
@@ -906,7 +920,7 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
             return [
                 "ok": true, "detail": describe(element), "mechanism": mechanism, "verified": false,
                 "unverified": "this field exposes no readable value, so the write could not be confirmed",
-            ]
+            ].merging(focusFacts(focusBefore, app)) { a, _ in a }
         }
         throw BridgeError(
             message: "the field did not take the value: wanted \"\(wanted)\", holds \"\(settled)\"")
@@ -918,7 +932,7 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         let item = pool[choice]
         let result = AXUIElementPerformAction(item, kAXPressAction as CFString)
         guard result == .success else { throw BridgeError(message: "select failed: AXError \(result.rawValue)") }
-        return ["ok": true, "detail": describe(item), "mechanism": "AXPress(option)"]
+        return ["ok": true, "detail": describe(item), "mechanism": "AXPress(option)"].merging(focusFacts(focusBefore, app)) { a, _ in a }
     default:
         throw BridgeError(message: "unknown operation \(op)")
     }

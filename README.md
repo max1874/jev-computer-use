@@ -238,8 +238,34 @@ Swap the decision call for a model that returns a choice instead of writing
 one out, and a six-press task stops being a seven-second task.
 
 `scripts/check_bridge.py` reproduces the accessibility half with no model calls
-at all, and both examples verify the outcome by reading the window back — a
-`DONE` choice is not evidence.
+at all.
+
+## Not taking the model's word for it
+
+`DONE` is the model's opinion about its own work. Give the agent a way to
+check and the check decides instead:
+
+```python
+with Agent("Calculator", "Compute 12 times 34",
+           verify=lambda page: "408" in page["text"]) as agent:
+    ...
+agent.state["verified"]    # True, False, or None if nothing could judge it
+agent.state["status"]      # "blocked" when the model said DONE and the check said no
+```
+
+Three separate facts are now recorded per step, because they are three
+different things and conflating them is how an agent comes to believe its own
+press release:
+
+- **dispatched** — the operation was sent. A reply that never comes back raises
+  `UnknownOutcome`: it may have run, so the run stops rather than retrying.
+- **window_changed** — something visibly moved. Not success.
+- **verified** — the caller's check agrees the goal is met.
+
+The same applies to staying out of your way. Every operation records the
+frontmost process before and after, so `took_focus` is a measurement rather
+than an architectural promise — `examples/calculator.py` prints `False` for it
+on every run.
 
 Known limits:
 

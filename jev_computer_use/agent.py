@@ -38,12 +38,17 @@ class Agent:
         activate=False,
         menus=True,
         pixels=True,
+        verify=None,
     ):
         goal = goal.strip() if isinstance(goal, str) else "\n".join(goal).strip()
         if not goal:
             raise ValueError("Supply a goal")
         self.approve = approve
         self.risk_threshold = risk_threshold
+        # Called with the final observation when the model says DONE. Return
+        # True to confirm, False to reject it, None if it cannot be judged.
+        # Without one, DONE is only ever the model's own claim.
+        self.verify = verify
         self.pending_text = None
         # Screenshots are a fallback for windows that publish nothing, not a
         # default input. Set pixels=False to keep the run tree-only.
@@ -69,6 +74,8 @@ class Agent:
             history=[],
             decisions=[],
             status="ready",
+            verified=None,
+            took_focus=False,
             elapsed_ms=0,
             started_at=None,
         )
@@ -161,8 +168,25 @@ class Agent:
                 if not self.desktop.fresh(page):
                     state["status"] = "ready"
                     raise StaleWindow("The window changed since the decision. Choose again.")
-                state["status"] = "done" if operation == "DONE" else "blocked"
                 state["elapsed_ms"] = self._elapsed()
+                if operation == "BLOCKED":
+                    state["status"] = "blocked"
+                    return self.snapshot()
+                # DONE is the model's opinion about its own work. When the
+                # caller supplied a way to check, the check decides.
+                verdict = None
+                if self.verify:
+                    try:
+                        verdict = self.verify(state["page"])
+                    except Exception as error:
+                        verdict = None
+                        state["note"] = f"the outcome check itself failed: {error}"
+                state["verified"] = verdict
+                if verdict is False:
+                    state["status"] = "blocked"
+                    state["note"] = "The model reported DONE and the outcome check disagreed."
+                else:
+                    state["status"] = "done"
                 return self.snapshot()
 
             if len(state["history"]) >= MAX_STEPS:
@@ -236,6 +260,8 @@ class Agent:
                     "text": text,
                     "mechanism": result.get("mechanism"),
                     "detail": result.get("detail"),
+                    "took_focus": result.get("took_focus", False),
+                    "verified_by_app": result.get("verified"),
                     "confidence": decision["confidence"],
                     "risk": decision["risk"],
                     "risk_reason": decision["risk_reason"],
@@ -259,6 +285,8 @@ class Agent:
                 state["status"] = "blocked"
                 return self.snapshot()
             state["elapsed_ms"] = self._elapsed()
+            if result.get("took_focus"):
+                state["took_focus"] = True
             changed = state["page"]["fingerprint"] != before
             if decision.get("pixels") and self.capture:
                 # The tree of a window like this hardly moves whatever happens

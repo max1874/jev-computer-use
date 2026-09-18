@@ -46,8 +46,13 @@ def main():
     time.sleep(2.0)
     clear("Calculator")
 
+    # The loop asks this before accepting DONE, so the model cannot declare
+    # victory over a display that does not say what it should.
+    def reached(page):
+        return options.expect in page["text"].replace("‎", "")
+
     started = time.perf_counter()
-    with Agent("Calculator", options.goal) as agent:
+    with Agent("Calculator", options.goal, verify=reached) as agent:
         shown = 0
         for state in agent.run():
             for step in state["history"][shown:]:
@@ -64,6 +69,7 @@ def main():
     print(f'\n{final["status"]} after {len(final["history"])} operations, {total} ms')
     print(f"  {len(decisions)} model calls, {model_ms} ms of it waiting on the model "
           f"({model_ms / total * 100:.0f}% of the wall clock)")
+    print(f'  outcome check: {final["verified"]}   took the screen: {final["took_focus"]}')
 
     # Independent verification: read the display, not the model's DONE.
     desktop = Desktop("Calculator")
