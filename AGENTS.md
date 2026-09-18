@@ -14,6 +14,10 @@ window → indexed elements → operation + target → guarded execution → obs
 - No screenshots on the tree path. Reaching for pixels because the reader is
   lazy is a bug; the fallback is for windows that genuinely publish nothing,
   and `desktop.sparseness` decides that by measurement, not by vibes.
+- When a window measures as sparse, suspect the reader before the app. The
+  first version of this project concluded from real measurements that Electron
+  apps publish nothing, and was wrong: the traversal stopped above the web
+  content. A measurement is evidence about the pair, not about the app.
 - Do not take the screen on the tree path. `activate` is opt-in, and the pixel
   fallback is gated behind it because a real click needs the app in front.
   Keyboard events go to the process, never to the system.

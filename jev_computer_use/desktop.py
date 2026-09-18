@@ -149,11 +149,13 @@ PIXEL_CHANGE_THRESHOLD = 2.0
 
 # A window is sparse when the tree accounts for almost none of its area AND
 # reads back almost no text AND offers nowhere to type. Measured across real
-# windows: Feishu 0.03 coverage / 2 characters, Linear 0.00 / 0 — against
-# TextEdit 0.15 / 659, Finder 0.11 / 1004, Calculator 0.55 / 13. Coverage alone
-# would condemn TextEdit and Finder, whose one big text area covers little but
-# says plenty; text alone would condemn Calculator, which has nothing to say
-# and everything to press.
+# windows: Linear 0.00 coverage / 0 characters — against Feishu 0.05 / 2431,
+# Lark 1.00 / 3399, TextEdit 0.15 / 659, Finder 0.11 / 1004, Calculator
+# 0.55 / 13. Every one of the three has to agree, because each is wrong on its
+# own: coverage alone would condemn TextEdit and Finder, whose one big text
+# area covers little but says plenty, and Feishu, which covers 5% of itself and
+# still hands over every message in the room; text alone would condemn
+# Calculator, which has nothing to say and everything to press.
 COVERAGE_LIMIT = 0.30
 TEXT_LIMIT = 200
 
@@ -161,13 +163,18 @@ TEXT_LIMIT = 200
 def sparseness(page):
     """Does this window publish enough of itself to be driven by the tree alone?
 
-    A Chromium-based app (Electron: Feishu, Linear, Slack, VS Code) renders its
-    real interface into a web content area. Unless something has switched its
-    accessibility support on, that area reaches the tree as nothing at all —
-    not even unnamed placeholders. What is left is the native chrome around it:
-    a sidebar, a toolbar, the window buttons, each perfectly well named. Judging
-    by how many elements have names therefore misses this entirely; the tell is
-    that most of the window is simply not described.
+    Far fewer windows than expected. An Electron app renders its interface into
+    a web content area, and it is tempting to conclude that the area is closed
+    to the accessibility tree, because that is exactly what a shallow walk sees:
+    the native chrome — sidebar, toolbar, window buttons, all properly named —
+    wrapped around a silent hole. The hole is an artefact of the walk. Chromium
+    puts the web area nine levels below the window and the interface inside it
+    another ten to twenty below that, so a limit set for native windows stops in
+    the empty scaffolding above the content. See DEFAULT_MAX_DEPTH in the bridge.
+
+    What is left after fixing that is the genuine article: Linear publishes
+    three elements, no text and nothing to press at any depth. For a window like
+    that the tree has nothing to offer and the screenshot is the only way in.
     """
     frame = page.get("window_frame") or [0, 0, 0, 0]
     area = max(1, frame[2] * frame[3])

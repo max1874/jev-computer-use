@@ -131,6 +131,29 @@ func appElement(_ app: NSRunningApplication) -> AXUIElement {
     AXUIElementCreateApplication(app.processIdentifier)
 }
 
+/// The element the app itself considers focused, which is not necessarily the
+/// one just asked to take focus.
+func focusedElement(_ pid: pid_t) -> AXUIElement? {
+    attr(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute).map { $0 as! AXUIElement }
+}
+
+/// What a field holds, with the editor's own scaffolding removed.
+///
+/// A rich-text composer does not store a plain string. Lark's, a Chromium
+/// contenteditable, reports a successful write of "hi" back as
+/// "\u{200B}\nhi\u{200B}\n\u{200B}\n\u{200B}" — zero-width spaces holding empty
+/// lines open, and the newlines between them. Comparing the raw strings calls
+/// that a failed write and refuses to believe text that is plainly in the box.
+///
+/// Only characters that carry no content are removed: the zero-width family,
+/// and whitespace at either end. This is deliberately not a substring test,
+/// which would accept a field that truncated "hello world" to "hello".
+func withoutScaffolding(_ text: String) -> String {
+    let invisible: Set<Character> = ["\u{200B}", "\u{200C}", "\u{200D}", "\u{FEFF}"]
+    return String(text.filter { !invisible.contains($0) })
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
 /// Resolve "0.3.1" — child indices from the application element.
 func resolve(_ app: NSRunningApplication, _ path: String) throws -> AXUIElement {
     var element = appElement(app)
@@ -405,6 +428,25 @@ func menuItems(_ app: NSRunningApplication, limit: Int) -> [[String: Any]] {
 func digest(_ text: String) -> String {
     SHA256.hash(data: Data(text.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
 }
+
+/// How far down to walk before giving up on a branch.
+///
+/// This is the difference between seeing an app and not seeing it. A native
+/// window puts its controls within a dozen levels of the window, so any limit
+/// past that costs nothing. A Chromium window does not: the web area itself
+/// sits nine levels down, and the interface rendered inside it — the message
+/// list, the composer, the send button — starts around twenty and runs past
+/// thirty. Measured on this machine, Feishu at depth 18 reports 2 characters
+/// and nothing to type into, and at depth 30 reports 2279 characters and a
+/// composer. Nothing was wrong with those windows; the walk stopped early.
+///
+/// 40 is where growth stops rather than a round number: Lark and Feishu report
+/// exactly the same tree at 40 and at 60. It costs the apps that need it about
+/// 100 ms a snapshot (Lark 34 ms to 169 ms, Feishu 43 ms to 132 ms) and costs
+/// the apps that do not nothing measurable (Calculator and Finder are flat
+/// from 18 to 60). Against a decision that takes the model most of a second,
+/// that is a good trade for reading the window instead of photographing it.
+let DEFAULT_MAX_DEPTH = 40
 
 func snapshot(app query: String, windowIndex: Int?, includeMenus: Bool, limit: Int, maxDepth: Int) throws -> Snapshot {
     if screenLocked() {
@@ -886,31 +928,72 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         return ["ok": true, "detail": current, "mechanism": action].merging(focusFacts(focusBefore, app)) { a, _ in a }
     case "TYPE_TEXT":
         guard let text = request["text"] as? String else { throw BridgeError(message: "TYPE_TEXT needs text") }
-        // This operation means "replace the whole value". Writing the value is
-        // the only mechanism that means exactly that; the keyboard fallback has
-        // to select the old contents first, or it would quietly become an
-        // insert and leave the field holding something nobody asked for.
+        let wanted = withoutScaffolding(text)
         let focused = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFTypeRef)
+
+        // This operation means "replace the whole value", and writing the value
+        // does not mean that everywhere. A native text field replaces. A rich
+        // text composer — Lark's, and anything else built on a Chromium
+        // contenteditable — inserts a paragraph and keeps what was there, so
+        // writing "beta" over "alpha" leaves a field holding both. Setting it
+        // to the empty string does not clear that field either: the attribute
+        // reads back empty while the content is still in the editor, and the
+        // next write brings it back into view.
+        //
+        // So the old contents are erased first, through the keyboard. It is
+        // done unconditionally rather than only when the field looks occupied,
+        // because on this composer an empty field does not look empty: with
+        // nothing in it the value reads back as the placeholder, "Message
+        // HJDM", and no attribute distinguishes that from someone having typed
+        // those words. Erasing either way costs one key pair and removes the
+        // question.
+        //
+        // Erasing first is also what makes the read-back below worth anything.
+        // Reading the value on its own proves nothing when the field already
+        // happened to hold what was about to be written — the check passes
+        // whether or not the write did anything. Against a field that was just
+        // emptied, a match means the text arrived.
+        //
+        // The keys go only to an element this process has just confirmed is the
+        // one the app is focused on. A select-all and a delete aimed anywhere
+        // else would destroy something nobody asked about.
+        if focused == .success, focusedElement(pid).map({ CFEqual($0, element) }) == true {
+            try pressKey("cmd+a", pid: pid)
+            sleepMs(20)
+            try pressKey("delete", pid: pid)
+            sleepMs(40)
+        }
+
         var mechanism = "AXValue"
+        let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFTypeRef)
         if result != .success {
             guard focused == .success else {
                 throw BridgeError(
                     message: "the field refused both the value (AXError \(result.rawValue)) and focus "
                         + "(AXError \(focused.rawValue)); typing now would go somewhere unknown")
             }
-            try pressKey("cmd+a", pid: pid)
-            sleepMs(30)
             typeText(text, pid: pid)
-            sleepMs(60)
-            mechanism = "CGEvent→pid (select all, then type)"
+            mechanism = "CGEvent→pid"
         }
+
         // Read back and require the value to actually be the value. A field
         // that truncated, decorated or ignored the write is not a success, and
         // a substring test would call two of those three a success.
-        let after = string(element, kAXValueAttribute)
-        let settled = after.trimmingCharacters(in: .whitespacesAndNewlines)
-        let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        //
+        // A native field holds the new value the instant the write returns and
+        // matches on the first read, paying nothing for this loop. A web
+        // composer applies the write through its own render and is still
+        // showing the old contents 25 ms later, so reading once would call a
+        // write that worked a write that failed.
+        var after = string(element, kAXValueAttribute)
+        var settled = withoutScaffolding(after)
+        var waited = 0
+        while settled != wanted, waited < 400 {
+            sleepMs(25)
+            waited += 25
+            after = string(element, kAXValueAttribute)
+            settled = withoutScaffolding(after)
+        }
         if settled == wanted {
             return ["ok": true, "detail": describe(element), "mechanism": mechanism, "verified": true].merging(focusFacts(focusBefore, app)) { a, _ in a }
         }
@@ -984,7 +1067,7 @@ func handle(_ request: [String: Any]) -> [String: Any] {
                 windowIndex: request["window"] as? Int,
                 includeMenus: (request["menus"] as? Bool) ?? true,
                 limit: (request["limit"] as? Int) ?? 250,
-                maxDepth: (request["depth"] as? Int) ?? 18
+                maxDepth: (request["depth"] as? Int) ?? DEFAULT_MAX_DEPTH
             )
             return ["id": id, "ok": true, "result": snapshotJSON(snap)]
         case "fingerprint":
@@ -996,7 +1079,7 @@ func handle(_ request: [String: Any]) -> [String: Any] {
                 windowIndex: request["window"] as? Int,
                 includeMenus: false,
                 limit: (request["limit"] as? Int) ?? 250,
-                maxDepth: (request["depth"] as? Int) ?? 18
+                maxDepth: (request["depth"] as? Int) ?? DEFAULT_MAX_DEPTH
             )
             return ["id": id, "ok": true, "result": ["fingerprint": snap.fingerprint, "window": snap.window]]
         case "capture":

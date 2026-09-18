@@ -157,9 +157,15 @@ active.
   element, and the element at that path must still mention what was chosen —
   otherwise the operation is refused, not guessed. Trees shift between
   observing and acting.
-- **Set the value, don't type it.** `TYPE_TEXT` writes the accessibility value
-  directly: no keystrokes, no focus change, and it reads the value back before
-  returning. Keyboard events are the fallback, and the result says which ran.
+- **Erase, set the value, read it back.** `TYPE_TEXT` means "replace the whole
+  value", and writing the value is not a replace everywhere: a rich text
+  composer treats it as an insert and keeps what was there. So the old contents
+  are erased through the keyboard first — aimed only at an element the app is
+  confirmed to be focused on — and only then is the value written and read
+  back. Erasing first is also what makes the read-back mean anything: a field
+  that already held the text would pass the check whether or not the write
+  landed. None of it takes the screen. Keyboard typing is the fallback when the
+  value is refused, and the result says which mechanism ran.
 - **Menu commands without opening menus.** The whole menu bar is a flat,
   addressable action space — something a browser agent has no equivalent of.
 - **Semantic freshness.** A fingerprint over roles, labels, values and states,
@@ -172,11 +178,26 @@ executable code. It selects an index from a table the executor built.
 
 ## When the window says nothing
 
-Chromium-based apps — Feishu, Linear, Slack, VS Code — render their real
-interface into a web content area that never reaches the accessibility tree.
-What is left is the native chrome: a sidebar, the window buttons, all perfectly
-well named and all useless. Feishu publishes 17 actionable elements covering 3%
-of its window, with two characters of readable text and nowhere to type.
+Far fewer windows than this project first claimed. An earlier version of this
+section said Electron apps — Feishu, Lark, Slack, VS Code — keep their interface
+out of the accessibility tree entirely, and cited Feishu publishing two
+characters of text and nowhere to type. That measurement was real and the
+conclusion drawn from it was wrong: the tree was there and the walk stopped
+above it. Chromium puts the web area nine levels below the window and the
+interface another ten to twenty below that, and the traversal limit had been set
+for native windows, which put everything within a dozen. Feishu at depth 18
+reports 2 characters; at depth 40 it reports 2431 characters and a composer to
+type into. Lark reports 3399 characters and 174 actionable elements.
+
+The cost of looking that far is about 100 ms per snapshot on the apps that need
+it (Lark 34 ms to 169 ms, Feishu 43 ms to 132 ms) and nothing measurable on the
+apps that do not — Calculator and Finder return identical trees at depth 18 and
+depth 60. Next to a decision the model takes most of a second to make, that is
+a cheap way to read a window instead of photographing it.
+
+What survives is a much smaller class. Linear publishes three elements, no text
+and nothing to press, at any depth. For a window like that the tree really has
+nothing to offer.
 
 So there is a second path, entered only when a window is sparse by measurement
 (little of the window described, almost no text, nothing editable — see
@@ -212,8 +233,10 @@ Measured on this machine (M-series, macOS 26), median of 20:
 |---|---|
 | snapshot, TextEdit window (4 elements) | **4.2 ms** |
 | snapshot, Chrome window (20 elements) | **11.5 ms** |
+| snapshot, Lark window (173 elements, 25 levels deep) | **169 ms** |
 | freshness check (no element table) | **3.5 ms** |
-| `TYPE_TEXT` execute, verify, and settle | **32 ms** |
+| `TYPE_TEXT` into a native field, erase + write + verify | **35 ms** |
+| `TYPE_TEXT` into a web composer (Lark), same | **213 ms** |
 | one whole step, act + settle + observe | **43 ms** |
 | bridge start, once per session | **57 ms** |
 
@@ -291,19 +314,29 @@ Known limits:
   For web pages use [browser-harness](https://github.com/browser-use/browser-harness)
   or [jev-ultrafast](https://github.com/browser-use/jev-ultrafast); this is for
   native apps.
-- **The pixel fallback has been verified on Calculator, not on a real Electron
+- **The pixel fallback has been verified on Calculator, not on a real sparse
   app.** Driving it through HID clicks works (7 × 3 = 21, by coordinate), the
   occlusion and frontmost guards refuse correctly, and the capture round-trips
   to the right screen point. Whether a model can reliably pick coordinates in a
-  dense interface like a chat client is untested.
+  dense interface is untested. Since the depth fix the fallback also fires far
+  less often than it was built to, which means it gets far less exercise.
 - One window at a time: the focused window of one app. No sheets belonging to
   other windows, no multi-app workflows, no drag, no canvas, no web views.
-- Apps that publish a poor accessibility tree cannot be driven well, and this
-  does not fall back to pixels. That is the trade.
+- Apps that publish a poor accessibility tree cannot be driven well. Before
+  concluding that an app is one of them, check that the walk is reaching its
+  content: that mistake is the subject of "When the window says nothing" above.
 - `SELECT` needs a pop-up button that exposes its menu while closed; many do
   not, and then only `PRESS` is offered.
 - The risk rating is a model's judgement, not a policy engine. It is a gate on
   obvious harm, not a guarantee.
+- **An editable field is not always a place to write prose.** A Finder window
+  and an open dialog publish every filename as an ordinary `AXTextField` with a
+  settable value, indistinguishable from a search box, so `TYPE_TEXT` aimed at
+  one is a rename. Both were renamed by accident while this was being built;
+  neither reached disk, because the name is only committed on Return. The guard
+  that exists for this is the risk rating and `approve`, which means the guard
+  is a model's opinion — worth knowing before running unattended somewhere with
+  a file browser open.
 
 ## Small enough to read
 
