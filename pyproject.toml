@@ -1,7 +1,7 @@
 [project]
 name = "jev-computer-use"
 version = "0.1.0"
-description = "A macOS computer-use agent that chooses instead of generating. No screenshots, no coordinates."
+description = "A macOS computer-use agent that chooses instead of generating. Accessibility tree first, pixels only as a last resort."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

@@ -2,7 +2,9 @@
 
 **A macOS computer-use agent with a dynamic, indexed action space.**
 
-No screenshots. No coordinates. No taking the screen away from you.
+The tree first: no screenshots, no coordinates, and it works on a window you
+are not looking at. Pixels only when an app publishes nothing — and then it
+says so, and takes the screen to do it.
 
 A macOS port of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast), which
 put the same idea on the web: give the model a numbered table of what it can
@@ -165,8 +167,42 @@ active.
 - **Visible text only.** Offscreen and zero-size elements never reach the
   model's context.
 
-Model output never becomes a path, a coordinate, a selector, a shell command or
+On this path, model output never becomes a path, a selector, a shell command or
 executable code. It selects an index from a table the executor built.
+
+## When the window says nothing
+
+Chromium-based apps — Feishu, Linear, Slack, VS Code — render their real
+interface into a web content area that never reaches the accessibility tree.
+What is left is the native chrome: a sidebar, the window buttons, all perfectly
+well named and all useless. Feishu publishes 17 actionable elements covering 3%
+of its window, with two characters of readable text and nowhere to type.
+
+So there is a second path, entered only when a window is sparse by measurement
+(little of the window described, almost no text, nothing editable — see
+`desktop.sparseness`): capture the window and offer `CLICK_POINT` and
+`TYPE_KEYS` alongside the indexed elements.
+
+**It is worse in every way, and it is meant to be a last resort.**
+
+- The model **invents a coordinate** instead of selecting an index, so nothing
+  can check the target before the click lands. This is the opposite of the idea
+  the rest of the project is built on.
+- It **takes the screen**. A mouse event posted to a process is ignored by
+  ordinary controls — Calculator's keypad does not react to one even when the
+  app is frontmost — so a click that actually lands must go through the window
+  server, which has one cursor. The app must be in front, the pointer really
+  moves, and it is put back afterwards. `pixels` is therefore only available
+  with `activate=True`.
+- It **sends your screen to the model.** The whole window, whatever is in it.
+- It **cannot be verified by the tree.** These windows' fingerprints barely
+  move whatever happens inside them, so captures carry a 16×16 greyscale
+  reduction and a pixel operation is judged by comparing two of them.
+
+Two guards stand in front of it. The app must be frontmost, and the point must
+not be occluded — the window list is ordered front to back, so the code can ask
+what a click at that point would actually hit. That guard exists because during
+development a click aimed at Calculator landed in a browser window covering it.
 
 ## Evidence and limits
 
@@ -229,6 +265,11 @@ Known limits:
   For web pages use [browser-harness](https://github.com/browser-use/browser-harness)
   or [jev-ultrafast](https://github.com/browser-use/jev-ultrafast); this is for
   native apps.
+- **The pixel fallback has been verified on Calculator, not on a real Electron
+  app.** Driving it through HID clicks works (7 × 3 = 21, by coordinate), the
+  occlusion and frontmost guards refuse correctly, and the capture round-trips
+  to the right screen point. Whether a model can reliably pick coordinates in a
+  dense interface like a chat client is untested.
 - One window at a time: the focused window of one app. No sheets belonging to
   other windows, no multi-app workflows, no drag, no canvas, no web views.
 - Apps that publish a poor accessibility tree cannot be driven well, and this

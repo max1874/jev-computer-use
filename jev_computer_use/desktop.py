@@ -106,26 +106,43 @@ def thumbnail_difference(before, after):
 PIXEL_CHANGE_THRESHOLD = 2.0
 
 
+# A window is sparse when the tree accounts for almost none of its area AND
+# reads back almost no text AND offers nowhere to type. Measured across real
+# windows: Feishu 0.03 coverage / 2 characters, Linear 0.00 / 0 — against
+# TextEdit 0.15 / 659, Finder 0.11 / 1004, Calculator 0.55 / 13. Coverage alone
+# would condemn TextEdit and Finder, whose one big text area covers little but
+# says plenty; text alone would condemn Calculator, which has nothing to say
+# and everything to press.
+COVERAGE_LIMIT = 0.30
+TEXT_LIMIT = 200
+
+
 def sparseness(page):
     """Does this window publish enough of itself to be driven by the tree alone?
 
-    A Chromium-based app (Electron: Lark, Slack, VS Code, Discord) renders its
-    real interface into the web content area and, unless something has switched
-    its accessibility support on, exposes that area as a pile of nameless
-    groups. The window still has elements — they just do not say what they are.
-
-    The test is that shape specifically: many actionable elements, most of them
-    unnamed. A small window whose few controls are all named is not sparse, and
-    a window with no actionable elements at all certainly is.
+    A Chromium-based app (Electron: Feishu, Linear, Slack, VS Code) renders its
+    real interface into a web content area. Unless something has switched its
+    accessibility support on, that area reaches the tree as nothing at all —
+    not even unnamed placeholders. What is left is the native chrome around it:
+    a sidebar, a toolbar, the window buttons, each perfectly well named. Judging
+    by how many elements have names therefore misses this entirely; the tell is
+    that most of the window is simply not described.
     """
+    frame = page.get("window_frame") or [0, 0, 0, 0]
+    area = max(1, frame[2] * frame[3])
+    # Nested elements double-count, which only makes a window look better
+    # covered than it is — never worse, so it cannot create a false positive.
+    coverage = min(1.0, sum(e["frame"][2] * e["frame"][3] for e in page["elements"]) / area)
     actionable = [e for e in page["elements"] if e["operations"]]
-    named = [e for e in actionable if e["label"]]
-    unnamed = len(actionable) - len(named)
-    sparse = not actionable or (len(named) / len(actionable) < 0.5 and unnamed >= 8)
+    editable = [e for e in page["elements"] if "TYPE_TEXT" in e["operations"]]
+    sparse = not actionable or (
+        coverage < COVERAGE_LIMIT and len(page["text"]) < TEXT_LIMIT and not editable
+    )
     return {
         "sparse": sparse,
         "actionable": len(actionable),
-        "named": len(named),
+        "named": len([e for e in actionable if e["label"]]),
+        "coverage": round(coverage, 3),
     }
 
 

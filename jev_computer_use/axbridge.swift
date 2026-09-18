@@ -636,6 +636,25 @@ func capture(_ app: NSRunningApplication, width: Int, quality: Double) throws ->
     ]
 }
 
+/// The frontmost ordinary window covering a screen point, if any.
+///
+/// `CGWindowListCopyWindowInfo` returns windows front to back, so the first
+/// match is what the window server would hand a click at that point.
+func frontWindow(at point: CGPoint) -> (id: CGWindowID, pid: pid_t)? {
+    for window in onScreenWindows() where (window[kCGWindowLayer as String] as? Int) == 0 {
+        let bounds = window[kCGWindowBounds as String] as? [String: CGFloat] ?? [:]
+        let rect = CGRect(
+            x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0,
+            width: bounds["Width"] ?? 0, height: bounds["Height"] ?? 0)
+        guard rect.contains(point) else { continue }
+        return (
+            CGWindowID(window[kCGWindowNumber as String] as? Int ?? 0),
+            window[kCGWindowOwnerPID as String] as? pid_t ?? 0
+        )
+    }
+    return nil
+}
+
 /// A 16x16 greyscale reduction of the capture.
 ///
 /// An Electron window's accessibility fingerprint barely moves no matter what
@@ -657,27 +676,56 @@ func thumbnail(_ image: CGImage) -> [Int] {
 
 /// Click a point named in the captured image's coordinate space.
 ///
-/// Events are posted to the process, so the user's pointer never moves and the
-/// click cannot land in whatever window happens to be under the real cursor.
+/// This moves the real pointer, and there is no way around it. A mouse event
+/// posted to a process is ignored by ordinary controls — Calculator's keypad
+/// does not react to one whether the app is frontmost or not — so a click that
+/// actually lands has to go through the window server, which has exactly one
+/// cursor and hands the event to whatever is under it.
+///
+/// Hence the two guards below: the app must be frontmost, and the point must
+/// not be covered. Everything on the accessibility path stays quiet and
+/// background; this does not, and cannot.
 func clickImagePoint(_ app: NSRunningApplication, x: Double, y: Double, scale: Double) throws -> [String: Any] {
-    let (_, rect) = try windowRect(app)
+    guard frontmostPID() == app.processIdentifier else {
+        throw BridgeError(
+            message: "refused: a real click goes wherever the pointer is, and "
+                + "\(app.localizedName ?? "the app") is not frontmost. Activate it first.")
+    }
+    let (id, rect) = try windowRect(app)
     let point = CGPoint(x: rect.minX + x * scale, y: rect.minY + y * scale)
     guard rect.insetBy(dx: -2, dy: -2).contains(point) else {
         throw BridgeError(
             message: "point \(Int(point.x)),\(Int(point.y)) is outside the window "
                 + "\(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))x\(Int(rect.height))")
     }
-    for (type, _) in [(CGEventType.leftMouseDown, 0), (CGEventType.leftMouseUp, 1)] {
+    // A point inside the window is not a point on the window. The window list
+    // is ordered front to back, so whatever owns this point first is what a
+    // click would actually hit — and a click that lands in somebody else's
+    // window is the worst thing this program can do.
+    if let covering = frontWindow(at: point), covering.id != id {
+        let owner = NSRunningApplication(processIdentifier: covering.pid)?.localizedName ?? "another app"
+        throw BridgeError(
+            message: "refused: \(Int(point.x)),\(Int(point.y)) is covered by \(owner). "
+                + "Raise \(app.localizedName ?? "the app") first, or choose a point that is not occluded.")
+    }
+    let restore = CGEvent(source: nil)?.location
+    for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
         guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
         else { throw BridgeError(message: "could not build a click event") }
         event.setIntegerValueField(.mouseEventClickState, value: 1)
-        event.postToPid(app.processIdentifier)
+        event.post(tap: .cghidEventTap)
+        sleepMs(type == .mouseMoved ? 30 : 40)
+    }
+    // Put the pointer back where the user left it.
+    if let restore, let move = CGEvent(
+        mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: restore, mouseButton: .left) {
         sleepMs(40)
+        move.post(tap: .cghidEventTap)
     }
     return [
         "ok": true,
         "detail": "clicked \(Int(point.x)),\(Int(point.y)) in \(app.localizedName ?? "the app")",
-        "mechanism": "CGEvent→pid (pixels)",
+        "mechanism": "HID (real pointer)",
     ]
 }
 

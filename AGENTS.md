@@ -11,11 +11,15 @@ window → indexed elements → operation + target → guarded execution → obs
   actually support. Model output never becomes a path, a selector, a shell
   command or executable code.
 - Never retry a mutation. Log execution before observing its result.
-- No screenshots in the loop. If you find yourself reaching for pixels, the
-  answer is a better tree reader or an honest limitation.
-- Do not take the screen. `activate` is opt-in and exists only because an
-  inactive app will not validate its menu bar. Keyboard events go to the
-  process, never to the system.
+- No screenshots on the tree path. Reaching for pixels because the reader is
+  lazy is a bug; the fallback is for windows that genuinely publish nothing,
+  and `desktop.sparseness` decides that by measurement, not by vibes.
+- Do not take the screen on the tree path. `activate` is opt-in, and the pixel
+  fallback is gated behind it because a real click needs the app in front.
+  Keyboard events go to the process, never to the system.
+- Never widen the pixel path's guards. A click must be on a frontmost,
+  unoccluded window. A click aimed at a covered window lands in someone else's
+  — that happened here once, and the guard exists because of it.
 - The guard is part of the decision request, not a second call. Do not lower
   the default threshold to make a demo smoother.
 - Verify outcomes by reading the window back. A `DONE` choice is not evidence,

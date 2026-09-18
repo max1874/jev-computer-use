@@ -46,7 +46,13 @@ class Agent:
         self.pending_text = None
         # Screenshots are a fallback for windows that publish nothing, not a
         # default input. Set pixels=False to keep the run tree-only.
-        self.pixels = pixels
+        #
+        # A real click goes through the window server, which has one cursor, so
+        # the pixel path only exists for an app that is in front. Offering it
+        # for a background window would be offering an operation that is
+        # guaranteed to be refused.
+        self.pixels = pixels and activate
+        self.activate = activate
         self.capture = None
         self.desktop = Desktop(app, menus=menus, activate=activate)
         try:
@@ -111,7 +117,12 @@ class Agent:
             # is the expensive, less reliable path, so it is entered only when
             # the tree leaves nothing to choose from.
             capture = None
-            if self.pixels and state["page"]["sparse"]:
+            if state["page"]["sparse"] and not self.pixels:
+                state["note"] = (
+                    "This window publishes almost nothing to the accessibility tree. "
+                    "Pass activate=True to allow the screenshot fallback, which needs the app in front."
+                )
+            elif self.pixels and state["page"]["sparse"]:
                 try:
                     capture = self.desktop.capture()
                 except BridgeError as error:
