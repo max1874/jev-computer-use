@@ -77,7 +77,7 @@ call on the critical path; a rating in the same structured answer is free.
 ## Try it
 
 ```bash
-git clone https://github.com/max/jev-computer-use.git
+git clone https://github.com/max1874/jev-computer-use.git
 cd jev-computer-use
 uv sync
 cp .env.example .env     # add DECISION_API_KEY
@@ -92,11 +92,19 @@ Grant **Accessibility** to the terminal running this (System Settings > Privacy
 & Security > Accessibility). Nothing here needs Screen Recording, because
 nothing here takes a screenshot.
 
-Any OpenAI-compatible endpoint that supports JSON-schema response formats
-works. Set `DECISION_BASE_URL` and `DECISION_MODEL` for anything other than
-OpenAI. When the provider returns logprobs, the inspector draws the real
-distribution over the operation head; otherwise it shows the model's own
-confidence.
+Any OpenAI-compatible chat endpoint works. A provider that constrains the
+answer server-side (`json_schema`) is used in strict mode; a provider that only
+guarantees valid JSON gets the same shape spelled out in the prompt. Either
+way an answer outside the offered choices is refused and nothing runs, so the
+constraint is never the only thing standing between a model and your machine.
+
+```bash
+DECISION_BASE_URL=https://api.deepseek.com/v1
+DECISION_MODEL=deepseek-flash      # V4.1-Flash: 1M context, logprobs, json_object
+```
+
+When the provider returns logprobs, the inspector draws the real distribution
+over the operation head; otherwise it shows the model's own confidence.
 
 ## Use the library
 

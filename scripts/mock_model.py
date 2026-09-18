@@ -12,6 +12,7 @@ transport, the schema, the target heads, the guard, and the execution path.
 
 import argparse
 import json
+import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
@@ -51,11 +52,33 @@ def decide(state, properties):
     return answer
 
 
+ENUM_LINE = re.compile(r'^- "([a-z_]+)": exactly one of (\[.*\])$', re.MULTILINE)
+
+
+def properties_from(body):
+    """Recover the expected answer shape, from the schema or from the prompt.
+
+    A provider that only guarantees valid JSON gets the shape spelled out in
+    the system message instead, so this stands in for both paths.
+    """
+    response_format = body.get("response_format") or {}
+    if response_format.get("type") == "json_schema":
+        return response_format["json_schema"]["schema"]["properties"]
+    instructions = body["messages"][0]["content"]
+    properties = {name: {"enum": json.loads(values)} for name, values in ENUM_LINE.findall(instructions)}
+    for name in ("confidence", "risk"):
+        properties[name] = {"type": "number"}
+    properties["risk_reason"] = {"type": "string"}
+    if '"type_text_value"' in instructions:
+        properties["type_text_value"] = {"type": ["string", "null"]}
+    return properties
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         state = json.loads(body["messages"][-1]["content"])
-        properties = body["response_format"]["json_schema"]["schema"]["properties"]
+        properties = properties_from(body)
         answer = decide(state, properties)
         payload = {
             "model": "mock-decider",

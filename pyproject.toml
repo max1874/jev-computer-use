@@ -8,7 +8,7 @@ requires-python = ">=3.11"
 dependencies = ["httpx[http2]>=0.28,<1"]
 
 [project.urls]
-Homepage = "https://github.com/max/jev-computer-use"
+Homepage = "https://github.com/max1874/jev-computer-use"
 
 [project.scripts]
 jev-cu = "jev_computer_use.demo:main"

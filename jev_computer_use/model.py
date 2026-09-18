@@ -121,7 +121,8 @@ def questions_for(targets, controls):
     return operations
 
 
-def response_schema(operations, targets):
+def head_properties(operations, targets):
+    """The fields the answer must contain: the operation, and one head per operation."""
     properties = {
         "operation": {"type": "string", "enum": sorted(operations)},
         "confidence": {"type": "number", "description": "0-1, how sure the operation is right"},
@@ -139,6 +140,10 @@ def response_schema(operations, targets):
             "type": ["string", "null"],
             "description": TEXT_VALUE + " Used only if the operation is TYPE_TEXT.",
         }
+    return properties
+
+
+def schema_format(properties):
     return {
         "type": "json_schema",
         "json_schema": {
@@ -152,6 +157,40 @@ def response_schema(operations, targets):
             },
         },
     }
+
+
+def object_format_instructions(properties):
+    """Spell the schema out for a provider that guarantees JSON but not its shape.
+
+    Nothing downstream trusts this: an answer outside the offered choices is
+    refused by `choose`, exactly as an invalid schema answer would be.
+    """
+    lines = ["Reply with one JSON object and nothing else. Its keys, all required:"]
+    for name in sorted(properties):
+        spec = properties[name]
+        if "enum" in spec:
+            lines.append(f'- "{name}": exactly one of {json.dumps(spec["enum"], ensure_ascii=False)}')
+        elif spec.get("type") == "number":
+            lines.append(f'- "{name}": a number between 0 and 1')
+        elif name == "type_text_value":
+            lines.append(f'- "{name}": a string, or null when the operation is not TYPE_TEXT')
+        else:
+            lines.append(f'- "{name}": a short string')
+        if spec.get("description"):
+            lines.append(f"    {spec['description']}")
+    return "\n".join(lines)
+
+
+def uses_json_schema(base_url):
+    """Whether this endpoint can constrain the answer server-side.
+
+    `DECISION_RESPONSE_FORMAT` overrides the guess. DeepSeek, for one,
+    guarantees valid JSON but not a given schema.
+    """
+    override = os.environ.get("DECISION_RESPONSE_FORMAT")
+    if override:
+        return override == "json_schema"
+    return "deepseek" not in base_url
 
 
 def operation_distribution(payload, chosen, operations):
@@ -206,20 +245,23 @@ def choose(page, goal, history):
         ],
         "offered_operations": operations,
     }
+    base = os.environ.get("DECISION_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    key = os.environ.get("DECISION_API_KEY")
+    properties = head_properties(operations, targets)
+    strict = uses_json_schema(base)
+    instructions = NEXT_ACTION if strict else NEXT_ACTION + "\n\n" + object_format_instructions(properties)
     body = {
         "model": os.environ.get("DECISION_MODEL", "gpt-5.6"),
         "temperature": 0,
         "max_tokens": 700,
         "logprobs": True,
         "top_logprobs": 8,
-        "response_format": response_schema(operations, targets),
+        "response_format": schema_format(properties) if strict else {"type": "json_object"},
         "messages": [
-            {"role": "system", "content": NEXT_ACTION},
+            {"role": "system", "content": instructions},
             {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
         ],
     }
-    base = os.environ.get("DECISION_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    key = os.environ.get("DECISION_API_KEY")
     if not key:
         raise RuntimeError("Set DECISION_API_KEY (and DECISION_BASE_URL / DECISION_MODEL) before running.")
     started = time.perf_counter()
