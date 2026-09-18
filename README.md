@@ -117,8 +117,23 @@ with Agent("TextEdit", "Replace the text with a haiku about the menu bar.") as a
 ```
 
 ```bash
+uv run --env-file .env python examples/calculator.py   # six presses, verified
+uv run --env-file .env python examples/textedit.py     # generate and enter a value
 uv run --env-file .env python examples/run.py \
   --app "System Settings" --goal 'Turn on Dock auto-hide.' --activate
+```
+
+```text
+  1021 ms  PRESS  1                 model  812 ms   risk 0.00
+  1933 ms  PRESS  2                 model  752 ms   risk 0.00
+  3099 ms  PRESS  Multiply          model  979 ms   risk 0.00
+  4034 ms  PRESS  3                 model  767 ms   risk 0.00
+  4934 ms  PRESS  4                 model  714 ms   risk 0.00
+  6273 ms  PRESS  Equals            model 1112 ms   risk 0.00
+
+done after 6 operations, 7728 ms
+  display                         : '12×34\n408'
+  the app never came to the front : True
 ```
 
 `--activate` brings the app to the front. Without it nothing moves on your
@@ -166,25 +181,50 @@ Measured on this machine (M-series, macOS 26), median of 20:
 | one whole step, act + settle + observe | **43 ms** |
 | bridge start, once per session | **57 ms** |
 
-So the harness costs about **43 ms per step**; everything else in a run is the
-model. `scripts/check_bridge.py` reproduces the accessibility half against
-a real TextEdit window with no model calls, and `examples/textedit.py` runs the
-whole loop and then verifies the result by reading the document back out of the
-tree — a `DONE` choice is not evidence.
+With a real model, `deepseek-flash` over the public API, on
+`examples/calculator.py` — press `1`, `2`, `×`, `3`, `4`, `=` and then notice
+you are done:
 
-**What has not been measured: a real model.** The loop has been exercised
-end to end against `scripts/mock_model.py`, a local stand-in that fills the
-schema by rule. That proves the transport, the schema, the target heads, the
-guard and the execution path — and proves nothing at all about whether a model
-picks good operations. There are no task-success or latency numbers here
-because none have been earned yet.
+| | |
+|---|---|
+| correct result, verified by reading the display | **4 / 4 runs** |
+| operations per run | 6 |
+| task wall clock | **7.5 s** (median) |
+| decision latency | **889 ms** (median of 25 calls) |
+| share of wall clock spent waiting on the model | **83%** |
+
+**The harness is 43 ms per step. The model is 889 ms. Twenty to one.**
+
+That gap is the whole argument for a System One model, and the reason
+jev-ultrafast runs on one. Nothing in this loop is waiting on macOS; it is
+waiting on a transformer generating a JSON object to say the word `PRESS`.
+Swap the decision call for a model that returns a choice instead of writing
+one out, and a six-press task stops being a seven-second task.
+
+`scripts/check_bridge.py` reproduces the accessibility half with no model calls
+at all, and both examples verify the outcome by reading the window back — a
+`DONE` choice is not evidence.
 
 Known limits:
+
+- **Extended thinking has to be off.** A model that reasons before answering
+  spends its output budget doing it: a `deepseek-flash` answer measured here
+  was 417 reasoning tokens to 13 tokens of JSON, and on a real action space it
+  is the JSON that gets truncated. Disabled automatically for DeepSeek; check
+  your provider's default before blaming the loop.
 
 - **Menu titles do not revalidate.** After a command flips a menu item's title
   ("Make Rich Text" → "Make Plain Text"), the accessibility tree kept reporting
   the old title for at least two seconds in testing. Menu commands whose titles
   are state-dependent are unreliable; stable ones are fine.
+- **Labels move under you.** Calculator's clear button is "All Clear" when the
+  display is clear and "Clear" when it is not. That is exactly what the
+  execution guard is for, and exactly why a plan made two observations ago
+  cannot be trusted.
+- **macOS terminates idle background apps.** An app the agent is driving but
+  nobody is looking at can be reclaimed between runs. If the window disappears
+  mid-run the operation that already executed stays on the record and the run
+  stops as blocked, rather than vanishing with an exception.
 - Web content inside a browser is mostly absent from the accessibility tree.
   For web pages use [browser-harness](https://github.com/browser-use/browser-harness)
   or [jev-ultrafast](https://github.com/browser-use/jev-ultrafast); this is for

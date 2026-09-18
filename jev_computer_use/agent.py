@@ -2,7 +2,7 @@
 
 import time
 
-from .desktop import Desktop, StaleWindow
+from .desktop import BridgeError, Desktop, StaleWindow
 from .model import action_space, choose, field_context, field_text
 from .questions import MAX_DECISIONS, MAX_STEPS, RISK_THRESHOLD
 
@@ -182,7 +182,16 @@ class Agent:
                 }
             )
             before = page["fingerprint"]
-            state["page"] = self.desktop.observe()
+            try:
+                state["page"] = self.desktop.observe()
+            except BridgeError as error:
+                # The operation ran. If the window has gone — closed, or the app
+                # terminated under it — the run stops, but what executed stays
+                # on the record rather than disappearing with the exception.
+                state["elapsed_ms"] = self._elapsed()
+                state["history"][-1].update(window_changed=None, unobserved=str(error))
+                state["status"] = "blocked"
+                return self.snapshot()
             state["elapsed_ms"] = self._elapsed()
             state["history"][-1].update(
                 window_changed=state["page"]["fingerprint"] != before,

@@ -78,6 +78,24 @@ it to the front is opt-in — it is the one thing the user will notice.
 Keyboard events, when they are needed at all, are posted to the target process
 rather than to the system, so they do not follow the user's focus.
 
+## The decision request
+
+Everything the model is asked goes in one request: the operation, a target for
+each available operation, the value for `TYPE_TEXT`, and the risk rating. Only
+the head matching the chosen operation can execute, so the rest cost a few
+output tokens and no extra round trip.
+
+Where the endpoint can constrain the answer server-side it is asked to. Where
+it can only guarantee valid JSON, the same shape goes in the prompt instead.
+Neither is load-bearing: an operation or target outside the offered choices is
+refused here, and nothing executes.
+
+Extended thinking is turned off where it is on by default. Choosing from an
+enumerated table is not a reasoning task, and a model that thinks first spends
+its output budget doing it — one measured `deepseek-flash` answer was 417
+reasoning tokens against 13 tokens of JSON. On a real action space it is the
+JSON that gets truncated, and the run fails with nothing executed.
+
 ## The guard
 
 The request that chooses the operation also rates how consequential it is, and

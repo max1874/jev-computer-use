@@ -181,6 +181,23 @@ def object_format_instructions(properties):
     return "\n".join(lines)
 
 
+def reasoning_body(base_url):
+    """Turn extended thinking off where it is on by default.
+
+    Picking an operation from an enumerated table is not a reasoning task, and
+    a model that thinks first spends its whole output budget doing it: a
+    `deepseek-flash` answer measured here was 417 reasoning tokens to 13 tokens
+    of JSON, and on a real action space the JSON is what gets truncated.
+
+    `DECISION_REASONING=default` leaves the provider's own behaviour alone.
+    """
+    if os.environ.get("DECISION_REASONING") == "default":
+        return {}
+    if "deepseek" in base_url:
+        return {"thinking": {"type": "disabled"}}
+    return {}
+
+
 def uses_json_schema(base_url):
     """Whether this endpoint can constrain the answer server-side.
 
@@ -257,6 +274,7 @@ def choose(page, goal, history):
         "logprobs": True,
         "top_logprobs": 8,
         "response_format": schema_format(properties) if strict else {"type": "json_object"},
+        **reasoning_body(base),
         "messages": [
             {"role": "system", "content": instructions},
             {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
@@ -328,6 +346,7 @@ def field_text(context):
             "model": model,
             "max_tokens": 512,
             "response_format": {"type": "json_object"},
+            **reasoning_body(base),
             "messages": [
                 {"role": "system", "content": TEXT_VALUE + ' Reply as {"text": "..."} or {"text": null}.'},
                 {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
