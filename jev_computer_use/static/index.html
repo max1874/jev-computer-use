@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>jev-computer-use inspector</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body data-token="__TOKEN__">
+<header>
+  <div class="brand">
+    <span class="mark">⌘</span>
+    <div>
+      <h1>jev-computer-use</h1>
+      <p>an indexed action space over the macOS accessibility tree</p>
+    </div>
+  </div>
+  <div class="controls">
+    <label>App
+      <input id="app" list="apps" placeholder="TextEdit" autocomplete="off" />
+      <datalist id="apps"></datalist>
+    </label>
+    <label class="grow">Goal
+      <input id="goal" placeholder="What should happen in that window?" autocomplete="off" />
+    </label>
+    <label class="check" title="Bring the app to the front. Needed only for menu-bar commands.">
+      <input type="checkbox" id="activate" /> activate
+    </label>
+    <button id="start" class="primary">Start</button>
+    <button id="step">Step</button>
+    <button id="run">Run</button>
+    <button id="stop" class="quiet">Stop</button>
+  </div>
+</header>
+
+<div id="banner" hidden></div>
+
+<main>
+  <section class="panel">
+    <h2>Element table <span id="count" class="tag"></span></h2>
+    <p class="hint">One index per element. Only the operations an element actually supports are offered.</p>
+    <div id="elements" class="scroll"></div>
+    <h2>Menu commands <span id="menu-count" class="tag"></span></h2>
+    <p class="hint" id="menu-hint">Readable while the menus stay closed — when the app is active.</p>
+    <div id="menus" class="scroll short"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Decision</h2>
+    <div id="decision" class="empty">Nothing chosen yet.</div>
+    <h2>Executed</h2>
+    <div id="history" class="scroll"></div>
+  </section>
+</main>
+
+<footer>
+  <span id="status" class="pill">idle</span>
+  <span id="elapsed"></span>
+  <span class="spacer"></span>
+  <span class="note">Loopback only. Operations run against a real application.</span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

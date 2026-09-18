@@ -1,0 +1,223 @@
+# jev-computer-use ⌘
+
+**A macOS computer-use agent with a dynamic, indexed action space.**
+
+No screenshots. No coordinates. No taking the screen away from you.
+
+A macOS port of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast), which
+put the same idea on the web: give the model a numbered table of what it can
+actually do, and let it **choose** rather than generate. On the desktop the
+table comes from the accessibility tree instead of the DOM — the same tree a
+screen reader uses, which every native app already publishes.
+
+```text
+[1] TextArea    Untitled            · this line should be replaced
+[2] Button      Close window
+[3] CheckBox    Wrap to page        · checked
+[4] PopUpButton Paper size          · A4
+[m7] Format > Make Rich Text
+```
+
+Elements the app does not expose an operation for never appear. A checkbox is
+never offered as a place to type. A disabled button is not a choice.
+
+## The loop
+
+```text
+                       one request
+                     ┌──────────────────────────────┐
+accessibility tree → │ operation                    │
+  → element table    │ press_target                 │
+                     │ type_text_target + its value │
+                     │ select_target / menu_target  │
+                     │ risk                         │
+                     └───────────────┬──────────────┘
+                   use the head that matches the operation
+                                     │
+                     PRESS [2] ──────┤──→ AXPress, by path
+                 TYPE_TEXT [1] ──────┤──→ AXValue, no keystrokes
+                      MENU [m7] ─────┘──→ the command, menu still closed
+                                     │
+                              observe again
+```
+
+Operations: `PRESS`, `TYPE_TEXT`, `SELECT`, `MENU`, `SCROLL_UP`, `SCROLL_DOWN`,
+`PRESS_RETURN`, `PRESS_ESCAPE`, `WAIT`, `DONE`, `BLOCKED`.
+
+Every target head is answered on the same observed state, and only the head
+matching the chosen operation can execute. Two decisions, one round trip —
+[jev-ultrafast's speculative fan-out](https://docs.typesafe.ai/patterns/fan-out),
+with the field's value speculated in the same request.
+
+## The guard rides along
+
+The riskiest thing about desktop automation is that a wrong press is not a
+wrong page — it is a sent message, a deleted file, a granted permission.
+
+So the same request that picks the operation also rates it. `risk >= 0.5` holds
+the operation and hands it back instead of running it:
+
+```python
+with Agent("Mail", "Reply to the top thread with a note that I am travelling") as agent:
+    for state in agent.run():
+        ...
+    if agent.state["status"] == "needs_approval":
+        decision = agent.state["decision"]
+        print(decision["operation"], decision["risk"], decision["risk_reason"])
+        # → PRESS 0.9 "sends a message on the user's behalf"
+        agent.approve_pending()   # only if you mean it
+```
+
+Pass `approve=lambda decision: ...` to answer programmatically, or raise
+`risk_threshold`. Nothing consequential runs while the default is in place.
+
+This costs no extra round trip. A separate safety reviewer is a second model
+call on the critical path; a rating in the same structured answer is free.
+
+## Try it
+
+```bash
+git clone https://github.com/max/jev-computer-use.git
+cd jev-computer-use
+uv sync
+cp .env.example .env     # add DECISION_API_KEY
+uv run jev-cu
+```
+
+The inspector opens on **http://127.0.0.1:8767**: the numbered element table,
+the operation and its probability distribution, the risk rating, and every
+operation that actually ran. **Step** decides and executes one at a time.
+
+Grant **Accessibility** to the terminal running this (System Settings > Privacy
+& Security > Accessibility). Nothing here needs Screen Recording, because
+nothing here takes a screenshot.
+
+Any OpenAI-compatible endpoint that supports JSON-schema response formats
+works. Set `DECISION_BASE_URL` and `DECISION_MODEL` for anything other than
+OpenAI. When the provider returns logprobs, the inspector draws the real
+distribution over the operation head; otherwise it shows the model's own
+confidence.
+
+## Use the library
+
+```python
+from jev_computer_use import Agent
+
+with Agent("TextEdit", "Replace the text with a haiku about the menu bar.") as agent:
+    for state in agent.run():
+        print(state["elapsed_ms"], state["status"])
+```
+
+```bash
+uv run --env-file .env python examples/run.py \
+  --app "System Settings" --goal 'Turn on Dock auto-hide.' --activate
+```
+
+`--activate` brings the app to the front. Without it nothing moves on your
+screen — the agent reads and presses a window you are not looking at. The one
+thing that needs the front is the menu bar: an inactive app reports every menu
+command as disabled, so menu commands are simply not offered until the app is
+active.
+
+## Why it moves
+
+- **One request per decision cycle.** The operation head and every target head
+  share one observed state.
+- **The tree, not the pixels.** An accessibility snapshot of a TextEdit window
+  is 4 ms and a few hundred tokens. A screenshot is an image, a resize
+  sensitivity, and a coordinate the model has to be right about.
+- **One long-lived bridge.** The Swift helper stays up for the session, so a
+  step costs one traversal, not a process launch.
+- **Act by path, guarded.** Every executed target came from an observed
+  element, and the element at that path must still mention what was chosen —
+  otherwise the operation is refused, not guessed. Trees shift between
+  observing and acting.
+- **Set the value, don't type it.** `TYPE_TEXT` writes the accessibility value
+  directly: no keystrokes, no focus change, and it reads the value back before
+  returning. Keyboard events are the fallback, and the result says which ran.
+- **Menu commands without opening menus.** The whole menu bar is a flat,
+  addressable action space — something a browser agent has no equivalent of.
+- **Semantic freshness.** A fingerprint over roles, labels, values and states,
+  not a mutation count. A window that merely moved has not changed.
+- **Visible text only.** Offscreen and zero-size elements never reach the
+  model's context.
+
+Model output never becomes a path, a coordinate, a selector, a shell command or
+executable code. It selects an index from a table the executor built.
+
+## Evidence and limits
+
+Measured on this machine (M-series, macOS 26), median of 20:
+
+| | |
+|---|---|
+| snapshot, TextEdit window (4 elements) | **4.2 ms** |
+| snapshot, Chrome window (20 elements) | **11.5 ms** |
+| freshness check (no element table) | **3.5 ms** |
+| `TYPE_TEXT` execute, verify, and settle | **32 ms** |
+| one whole step, act + settle + observe | **43 ms** |
+| bridge start, once per session | **57 ms** |
+
+So the harness costs about **43 ms per step**; everything else in a run is the
+model. `scripts/check_bridge.py` reproduces the accessibility half against
+a real TextEdit window with no model calls, and `examples/textedit.py` runs the
+whole loop and then verifies the result by reading the document back out of the
+tree — a `DONE` choice is not evidence.
+
+**What has not been measured: a real model.** The loop has been exercised
+end to end against `scripts/mock_model.py`, a local stand-in that fills the
+schema by rule. That proves the transport, the schema, the target heads, the
+guard and the execution path — and proves nothing at all about whether a model
+picks good operations. There are no task-success or latency numbers here
+because none have been earned yet.
+
+Known limits:
+
+- **Menu titles do not revalidate.** After a command flips a menu item's title
+  ("Make Rich Text" → "Make Plain Text"), the accessibility tree kept reporting
+  the old title for at least two seconds in testing. Menu commands whose titles
+  are state-dependent are unreliable; stable ones are fine.
+- Web content inside a browser is mostly absent from the accessibility tree.
+  For web pages use [browser-harness](https://github.com/browser-use/browser-harness)
+  or [jev-ultrafast](https://github.com/browser-use/jev-ultrafast); this is for
+  native apps.
+- One window at a time: the focused window of one app. No sheets belonging to
+  other windows, no multi-app workflows, no drag, no canvas, no web views.
+- Apps that publish a poor accessibility tree cannot be driven well, and this
+  does not fall back to pixels. That is the trade.
+- `SELECT` needs a pop-up button that exposes its menu while closed; many do
+  not, and then only `PRESS` is offered.
+- The risk rating is a model's judgement, not a policy engine. It is a gate on
+  obvious harm, not a guarantee.
+
+## Small enough to read
+
+| File | Job |
+| --- | --- |
+| [`axbridge.swift`](jev_computer_use/axbridge.swift) | The accessibility snapshot, the indexed table, and guarded execution |
+| [`agent.py`](jev_computer_use/agent.py) | The loop, the guard gate, and the staleness handling |
+| [`model.py`](jev_computer_use/model.py) | The action space and the one request that fills every head |
+| [`desktop.py`](jev_computer_use/desktop.py) | The long-lived bridge and the settle policy |
+| [`questions.py`](jev_computer_use/questions.py) | The instructions and the budgets |
+| [`demo.py`](jev_computer_use/demo.py) | The local inspector |
+
+`scripts/build.sh` compiles the bridge with `swiftc` and no dependencies.
+
+## Credit
+
+The design is [jev-ultrafast](https://github.com/browser-use/jev-ultrafast)'s:
+the indexed action space, the speculative target heads, the scoped freshness
+guards, and the rule that the model chooses rather than generates. That project
+is by [Browser Use](https://github.com/browser-use) and runs on
+[TypeSafe's Jev](https://docs.typesafe.ai/introduction).
+
+This port uses an OpenAI-compatible model for the decision, so it runs without
+a Jev key. The decision call is a single structured answer over enumerated
+choices, which is exactly the shape a System One model takes — dropping Jev in
+behind `model.choose` is the obvious next step, and the text-value fallback in
+`model.field_text` is already there for a backend that chooses but cannot
+write.
+
+The accessibility helpers follow `cu`, a macOS accessibility CLI, MIT.
+
+MIT.
