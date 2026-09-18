@@ -68,6 +68,45 @@ def post_json(url, key, body):
     raise RuntimeError("Model unavailable")
 
 
+def scaffolding(candidates):
+    """Paths of the unnamed elements that exist only to contain another one.
+
+    A Chromium interface is built out of nested anonymous containers, and the
+    accessibility tree reports each one as a pressable group with no name. Laid
+    out as a flat indexed table they become a hundred choices that read alike
+    and differ only by number — Lark offered 143 elements of which 121 were
+    these. They are not choices. Whatever they wrap is the choice, and it is in
+    the table too.
+
+    A container is dropped when something else in the table sits inside it and
+    the container either has no name of its own, or has the same name as the
+    thing inside it. The second case is the common one once unnamed containers
+    take their name from the words underneath: a row and the single box inside
+    it both come back reading "HJDM", and only the inner one should be offered.
+
+    A group with no name and no words under it is dropped outright. A group is
+    a container by definition, and one that cannot say what it contains is not
+    something a model can choose: in Lark these are the 24x21 avatars inside
+    chat rows that are already offered by name, and the sidebar itself. An
+    unnamed *button* is kept — that is an icon-only control, and nothing else
+    in the table reaches it.
+    """
+    drop = {
+        candidate["path"]
+        for candidate in candidates
+        if candidate["role"] == "AXGroup" and not candidate["label"] and not candidate.get("value")
+    }
+    for candidate in candidates:
+        inside = [
+            other for other in candidates if other["path"].startswith(candidate["path"] + ".")
+        ]
+        if not inside:
+            continue
+        if not candidate["label"] or any(other["label"] == candidate["label"] for other in inside):
+            drop.add(candidate["path"])
+    return drop
+
+
 def action_space(page, pixels=False):
     """One index per element; each operation carries only the targets it can use.
 
@@ -75,22 +114,35 @@ def action_space(page, pixels=False):
     targetless controls. `pixels` adds the screenshot operations, which are
     offered only when the tree has too little in it to work from.
     """
-    elements, targets = [], {}
-    for source in page["elements"]:
-        operations = [op for op in source["operations"] if op in TARGETED]
+    usable = [
+        source
+        for source in page["elements"]
         # An element with no usable operation is context, not a choice.
-        if not operations and source["role"] != "AXTextArea":
+        if [op for op in source["operations"] if op in TARGETED] or source["role"] == "AXTextArea"
+    ]
+    wrappers = scaffolding(usable)
+
+    elements, targets = [], {}
+    for source in usable:
+        if source["path"] in wrappers:
             continue
+        operations = [op for op in source["operations"] if op in TARGETED]
         index = source["index"]
-        shown = {
-            "index": index,
-            "role": source["role"].removeprefix("AX"),
-            "label": source["label"] or source["role"].removeprefix("AX"),
-            "operations": operations,
-        }
+        shown = {"index": index, "role": source["role"].removeprefix("AX")}
+        # No invented label. Writing the role into the label field turned a
+        # hundred anonymous containers into a hundred elements all called
+        # "Group", which reads as a table of real choices and is not one.
+        if source["label"]:
+            shown["label"] = source["label"]
+        shown["operations"] = operations
+        name = source["label"] or source["role"].removeprefix("AX")
         for key in ("value", "checked", "selected"):
-            if source.get(key) not in (None, ""):
-                shown[key] = source[key]
+            value = source.get(key)
+            # `checked` is about the control's own state, so False is news.
+            # `selected` is False on almost everything and says nothing.
+            if value in (None, "") or (key == "selected" and not value):
+                continue
+            shown[key] = value
         # The identity that must still hold at execution time. The identifier
         # is the strongest of these and the label the weakest, so all three go.
         expect = source["label"] or source["role"]
@@ -104,7 +156,7 @@ def action_space(page, pixels=False):
                         "path": source["path"],
                         "option": option["child"],
                         **identity,
-                        "label": f"{shown['label']} → {option['label']}",
+                        "label": f"{name} → {option['label']}",
                     }
                 if source.get("options"):
                     shown["options"] = [o["label"] for o in source["options"]]
@@ -116,7 +168,7 @@ def action_space(page, pixels=False):
                     "op": operation,
                     "path": source["path"],
                     **identity,
-                    "label": shown["label"],
+                    "label": name,
                     "role": shown["role"],
                     "value": shown.get("value", ""),
                 }

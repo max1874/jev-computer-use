@@ -256,12 +256,42 @@ func label(of element: AXUIElement, role: String) -> String {
         }
     }
     if role != kAXStaticTextRole {
-        for child in children(element).prefix(4) where string(child, kAXRoleAttribute) == kAXStaticTextRole {
-            let text = string(child, kAXValueAttribute).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { return text }
-        }
+        let spoken = containedText(element)
+        if !spoken.isEmpty { return spoken }
     }
     return ""
+}
+
+/// The words a screen reader would read out for a container with no name.
+///
+/// Chromium names very little. A chat row, a message bubble, a list item each
+/// arrive as an unnamed group whose words live in static text nodes some way
+/// below it — in Lark, two or three levels below. Looking only at direct
+/// children finds nothing, and the element reaches the model as "Group", one of
+/// a hundred identical rows that cannot be told apart and therefore cannot be
+/// chosen between. Reading the text underneath is what turns one of them into
+/// "HJDM 17:01 Justin Sun".
+///
+/// Bounded on every side, because this runs for each unnamed element in the
+/// window and a message list is both deep and wide.
+func containedText(_ element: AXUIElement, depth: Int = 3, pieces: Int = 4) -> String {
+    var found: [String] = []
+    func gather(_ node: AXUIElement, _ remaining: Int) {
+        guard remaining >= 0, found.count < pieces else { return }
+        for child in children(node).prefix(8) {
+            if found.count >= pieces { return }
+            let role = string(child, kAXRoleAttribute)
+            if role == kAXStaticTextRole {
+                let text = string(child, kAXValueAttribute).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { found.append(text) }
+            } else if remaining > 0 {
+                gather(child, remaining - 1)
+            }
+        }
+    }
+    gather(element, depth)
+    let joined = found.joined(separator: " ")
+    return joined.count > 80 ? String(joined.prefix(77)) + "..." : joined
 }
 
 /// Options of a popup button, when its menu is exposed while closed.
