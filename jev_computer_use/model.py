@@ -33,6 +33,24 @@ TARGETED = {
     "MENU": "Run a menu-bar command by name, without opening the menu first.",
 }
 
+# Offered only when the window will not say what is in it, and strictly worse
+# than everything above: the model invents a coordinate instead of selecting an
+# index, so nothing can check the target before the click lands, and the text
+# goes wherever the app's own focus happens to be. Every other operation is
+# addressed to an element that was observed; these two are aimed at a picture.
+PIXEL_CONTROLS = {
+    "CLICK_POINT": (
+        "Click a point in the screenshot, for something the window does not expose as an element. "
+        "Give click_x and click_y in the screenshot's own pixel coordinates.",
+        {"op": "CLICK_POINT"},
+    ),
+    "TYPE_KEYS": (
+        "Type text as keystrokes into whatever the app has focused. There is no field to aim at, "
+        "so only use this straight after clicking into one.",
+        {"op": "TYPE_KEYS"},
+    ),
+}
+
 
 def post_json(url, key, body):
     for attempt in range(3):
@@ -50,11 +68,12 @@ def post_json(url, key, body):
     raise RuntimeError("Model unavailable")
 
 
-def action_space(page):
+def action_space(page, pixels=False):
     """One index per element; each operation carries only the targets it can use.
 
     Returns the table shown to the model, the per-operation target maps, and the
-    targetless controls.
+    targetless controls. `pixels` adds the screenshot operations, which are
+    offered only when the tree has too little in it to work from.
     """
     elements, targets = [], {}
     for source in page["elements"]:
@@ -109,13 +128,17 @@ def action_space(page):
             "label": item["label"],
         }
 
-    controls = {name: {"operation": name, **body} for name, (_, body) in CONTROLS.items()}
+    offered = dict(CONTROLS)
+    if pixels:
+        offered.update(PIXEL_CONTROLS)
+    controls = {name: {"operation": name, **body} for name, (_, body) in offered.items()}
     return elements, targets, controls
 
 
 def questions_for(targets, controls):
+    descriptions = {**CONTROLS, **PIXEL_CONTROLS}
     operations = {name: TARGETED[name] for name in targets}
-    operations.update({name: CONTROLS[name][0] for name in controls})
+    operations.update({name: descriptions[name][0] for name in controls})
     operations["DONE"] = "Every requirement is visibly satisfied in the current window."
     operations["BLOCKED"] = "No offered operation can make progress."
     return operations
@@ -139,6 +162,13 @@ def head_properties(operations, targets):
         properties["type_text_value"] = {
             "type": ["string", "null"],
             "description": TEXT_VALUE + " Used only if the operation is TYPE_TEXT.",
+        }
+    if "CLICK_POINT" in operations:
+        properties["click_x"] = {"type": ["number", "null"], "description": "Screenshot x, used only for CLICK_POINT."}
+        properties["click_y"] = {"type": ["number", "null"], "description": "Screenshot y, used only for CLICK_POINT."}
+        properties["keys_value"] = {
+            "type": ["string", "null"],
+            "description": TEXT_VALUE + " Used only if the operation is TYPE_KEYS.",
         }
     return properties
 
@@ -249,9 +279,27 @@ def operation_distribution(payload, chosen, operations):
     return {}
 
 
-def choose(page, goal, history):
-    """One request: the operation, a target for every operation, and a risk rating."""
-    elements, targets, controls = action_space(page)
+def user_content(state, capture):
+    """The observed state, with the picture attached when there is one."""
+    text = json.dumps(state, ensure_ascii=False)
+    if not capture:
+        return text
+    return [
+        {"type": "text", "text": text},
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:{capture['media_type']};base64,{capture['image']}"},
+        },
+    ]
+
+
+def choose(page, goal, history, capture=None):
+    """One request: the operation, a target for every operation, and a risk rating.
+
+    `capture` is a screenshot of the window, passed only when the tree is too
+    sparse to work from. It adds the pixel operations and costs an image.
+    """
+    elements, targets, controls = action_space(page, pixels=bool(capture))
     operations = questions_for(targets, controls)
     state = {
         "goal": goal,
@@ -263,6 +311,15 @@ def choose(page, goal, history):
         ],
         "offered_operations": operations,
     }
+    if capture:
+        state["screenshot"] = {
+            "why": "This window exposes almost nothing to the accessibility tree, so most of what "
+            "you can see in the picture has no element index. Prefer an indexed element when one "
+            "fits; fall back to CLICK_POINT only for what the table does not contain.",
+            "width": capture["image_width"],
+            "height": capture["image_height"],
+            "coordinates": "Top-left origin. click_x is 0 to width, click_y is 0 to height.",
+        }
     base = os.environ.get("DECISION_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     key = os.environ.get("DECISION_API_KEY")
     properties = head_properties(operations, targets)
@@ -278,7 +335,7 @@ def choose(page, goal, history):
         **reasoning_body(base),
         "messages": [
             {"role": "system", "content": instructions},
-            {"role": "user", "content": json.dumps(state, ensure_ascii=False)},
+            {"role": "user", "content": user_content(state, capture)},
         ],
     }
     if not key:
@@ -302,7 +359,19 @@ def choose(page, goal, history):
             raise ValueError(f"{operation} target {target!r} was not offered; no operation executed.")
         action = targets[operation][target]
     elif operation in controls:
-        action = controls[operation]
+        action = dict(controls[operation])
+        if operation == "CLICK_POINT":
+            x, y = answer.get("click_x"), answer.get("click_y")
+            if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (x, y)):
+                raise ValueError("CLICK_POINT came back without a usable point; no operation executed.")
+            width, height = capture["image_width"], capture["image_height"]
+            if not (0 <= x <= width and 0 <= y <= height):
+                raise ValueError(f"CLICK_POINT {x},{y} is outside the {width}x{height} capture; nothing executed.")
+            # The scale travels with the capture the point was named in, so a
+            # stale screenshot cannot be turned into a click somewhere else.
+            action.update(x=float(x), y=float(y), scale=capture["scale"], label=f"point {int(x)},{int(y)}")
+        elif operation == "TYPE_KEYS":
+            action["label"] = "focused field"
 
     risk = answer.get("risk")
     if not isinstance(risk, (int, float)) or not math.isfinite(risk):
@@ -311,7 +380,8 @@ def choose(page, goal, history):
         "operation": operation,
         "target": target,
         "action": action,
-        "text": answer.get("type_text_value"),
+        "text": answer.get("keys_value") if operation == "TYPE_KEYS" else answer.get("type_text_value"),
+        "pixels": bool(capture) and operation in PIXEL_CONTROLS,
         "confidence": max(0.0, min(1.0, float(answer.get("confidence") or 0))),
         "risk": max(0.0, min(1.0, float(risk))),
         "risk_reason": str(answer.get("risk_reason") or "")[:300],

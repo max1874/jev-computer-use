@@ -81,7 +81,52 @@ class Bridge:
 # sheet animates in; paying for a decision before it exists wastes a round trip.
 # TYPE_TEXT needs almost nothing, because setting the accessibility value is
 # synchronous and `act` has already read the value back before returning.
-SETTLE_MS = {"MENU": 220, "SELECT": 220, "PRESS": 60, "TYPE_TEXT": 25, "WAIT": 150}
+SETTLE_MS = {
+    "MENU": 220,
+    "SELECT": 220,
+    "PRESS": 60,
+    "TYPE_TEXT": 25,
+    "WAIT": 150,
+    # A web interface answers a click by re-rendering, which is slower than a
+    # native control flipping state, and nothing here can read that it finished.
+    "CLICK_POINT": 400,
+    "TYPE_KEYS": 250,
+}
+
+
+def thumbnail_difference(before, after):
+    """Mean absolute difference between two 16x16 greyscale reductions, 0 to 255."""
+    if not before or not after or len(before) != len(after):
+        return None
+    return sum(abs(a - b) for a, b in zip(before, after)) / len(before)
+
+
+# Below this the window looks unchanged: a caret blink and a hover highlight
+# land under it, a menu or panel opening lands well above.
+PIXEL_CHANGE_THRESHOLD = 2.0
+
+
+def sparseness(page):
+    """Does this window publish enough of itself to be driven by the tree alone?
+
+    A Chromium-based app (Electron: Lark, Slack, VS Code, Discord) renders its
+    real interface into the web content area and, unless something has switched
+    its accessibility support on, exposes that area as a pile of nameless
+    groups. The window still has elements — they just do not say what they are.
+
+    The test is that shape specifically: many actionable elements, most of them
+    unnamed. A small window whose few controls are all named is not sparse, and
+    a window with no actionable elements at all certainly is.
+    """
+    actionable = [e for e in page["elements"] if e["operations"]]
+    named = [e for e in actionable if e["label"]]
+    unnamed = len(actionable) - len(named)
+    sparse = not actionable or (len(named) / len(actionable) < 0.5 and unnamed >= 8)
+    return {
+        "sparse": sparse,
+        "actionable": len(actionable),
+        "named": len(named),
+    }
 
 
 class Desktop:
@@ -108,7 +153,12 @@ class Desktop:
     def observe(self):
         page = self.bridge.call("snapshot", app=self.app, menus=self.menus, limit=self.limit)
         page["observed_at"] = time.time()
+        page.update(sparseness(page))
         return page
+
+    def capture(self, width=1000, quality=0.6):
+        """A picture of the window, in a coordinate space a click can be named in."""
+        return self.bridge.call("capture", app=self.app, width=width, quality=quality)
 
     def fresh(self, page):
         """Has the window's semantic state survived since this observation?"""
@@ -133,6 +183,9 @@ class Desktop:
             request["option"] = action["option"]
         if "key" in action:
             request["key"] = action["key"]
+        for field in ("x", "y", "scale"):
+            if field in action:
+                request[field] = action[field]
         if text is not None:
             request["text"] = text
         try:

@@ -562,6 +562,125 @@ func typeText(_ text: String, pid: pid_t) {
     }
 }
 
+// MARK: - Pixels, for apps that publish nothing
+
+/// The on-screen window of an app, in global points, with its CGWindow id.
+func windowRect(_ app: NSRunningApplication) throws -> (id: CGWindowID, rect: CGRect) {
+    for window in onScreenWindows() where (window[kCGWindowLayer as String] as? Int) == 0 {
+        guard (window[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier else { continue }
+        let bounds = window[kCGWindowBounds as String] as? [String: CGFloat] ?? [:]
+        let rect = CGRect(
+            x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0,
+            width: bounds["Width"] ?? 0, height: bounds["Height"] ?? 0)
+        guard rect.width > 1, rect.height > 1 else { continue }
+        return (CGWindowID(window[kCGWindowNumber as String] as? Int ?? 0), rect)
+    }
+    throw BridgeError(message: "\(app.localizedName ?? "the app") has no on-screen window to capture")
+}
+
+/// Capture one window as a JPEG, downscaled to `width` points.
+///
+/// The model is shown a picture whose coordinate space is the window's own, so
+/// a point it names converts back to the screen by one offset and one scale.
+func capture(_ app: NSRunningApplication, width: Int, quality: Double) throws -> [String: Any] {
+    guard CGPreflightScreenCaptureAccess() else {
+        throw BridgeError(
+            message: "Screen Recording permission is missing, so a capture would be blank. "
+                + "System Settings > Privacy & Security > Screen Recording: enable the app running this "
+                + "shell, then restart it.")
+    }
+    let (id, rect) = try windowRect(app)
+    let file = FileManager.default.temporaryDirectory
+        .appendingPathComponent("jev-cu-\(UUID().uuidString).png")
+    defer { try? FileManager.default.removeItem(at: file) }
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    task.arguments = ["-x", "-o", "-l", "\(id)", file.path]
+    try? task.run()
+    task.waitUntilExit()
+    guard task.terminationStatus == 0, let raw = NSImage(contentsOf: file) else {
+        throw BridgeError(message: "screencapture failed (\(task.terminationStatus))")
+    }
+    guard let source = raw.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        throw BridgeError(message: "could not read the captured image")
+    }
+    // The capture is in pixels; the window is in points. Downscale to a width
+    // the model can read cheaply and record the factor back to screen points.
+    let target = min(width, source.width)
+    let height = Int((Double(source.height) / Double(source.width) * Double(target)).rounded())
+    guard
+        let context = CGContext(
+            data: nil, width: target, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+    else { throw BridgeError(message: "could not build a scaling context") }
+    context.interpolationQuality = .high
+    context.draw(source, in: CGRect(x: 0, y: 0, width: target, height: height))
+    guard let scaled = context.makeImage() else { throw BridgeError(message: "could not scale the capture") }
+    let bitmap = NSBitmapImageRep(cgImage: scaled)
+    guard
+        let jpeg = bitmap.representation(
+            using: .jpeg, properties: [.compressionFactor: quality])
+    else { throw BridgeError(message: "could not encode the capture") }
+    return [
+        "thumbnail": thumbnail(scaled),
+        "image": jpeg.base64EncodedString(),
+        "media_type": "image/jpeg",
+        "image_width": target,
+        "image_height": height,
+        // Multiply an image point by this and add the origin to reach the screen.
+        "scale": Double(rect.width) / Double(target),
+        "origin": [Double(rect.minX), Double(rect.minY)],
+        "window_frame": [Int(rect.minX), Int(rect.minY), Int(rect.width), Int(rect.height)],
+        "bytes": jpeg.count,
+    ]
+}
+
+/// A 16x16 greyscale reduction of the capture.
+///
+/// An Electron window's accessibility fingerprint barely moves no matter what
+/// happens inside it, so the tree cannot tell whether a click landed. Comparing
+/// two of these can: it is coarse enough to ignore a caret blink and fine
+/// enough to notice a panel opening.
+func thumbnail(_ image: CGImage) -> [Int] {
+    let side = 16
+    var pixels = [UInt8](repeating: 0, count: side * side)
+    guard
+        let context = CGContext(
+            data: &pixels, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)
+    else { return [] }
+    context.interpolationQuality = .medium
+    context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+    return pixels.map { Int($0) }
+}
+
+/// Click a point named in the captured image's coordinate space.
+///
+/// Events are posted to the process, so the user's pointer never moves and the
+/// click cannot land in whatever window happens to be under the real cursor.
+func clickImagePoint(_ app: NSRunningApplication, x: Double, y: Double, scale: Double) throws -> [String: Any] {
+    let (_, rect) = try windowRect(app)
+    let point = CGPoint(x: rect.minX + x * scale, y: rect.minY + y * scale)
+    guard rect.insetBy(dx: -2, dy: -2).contains(point) else {
+        throw BridgeError(
+            message: "point \(Int(point.x)),\(Int(point.y)) is outside the window "
+                + "\(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))x\(Int(rect.height))")
+    }
+    for (type, _) in [(CGEventType.leftMouseDown, 0), (CGEventType.leftMouseUp, 1)] {
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
+        else { throw BridgeError(message: "could not build a click event") }
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.postToPid(app.processIdentifier)
+        sleepMs(40)
+    }
+    return [
+        "ok": true,
+        "detail": "clicked \(Int(point.x)),\(Int(point.y)) in \(app.localizedName ?? "the app")",
+        "mechanism": "CGEvent→pid (pixels)",
+    ]
+}
+
 func pressMenuPath(_ app: NSRunningApplication, _ path: String) throws -> String {
     let titles = path.split(separator: ">").map { $0.trimmingCharacters(in: .whitespaces) }
     guard let bar = children(appElement(app)).first(where: { string($0, kAXRoleAttribute) == kAXMenuBarRole })
@@ -606,6 +725,19 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         guard let combo = request["key"] as? String else { throw BridgeError(message: "KEY needs a combo") }
         try pressKey(combo, pid: pid)
         return ["ok": true, "detail": "key \(combo)", "mechanism": "CGEvent→pid"]
+    }
+    if op == "CLICK_POINT" {
+        guard let x = request["x"] as? Double, let y = request["y"] as? Double,
+            let scale = request["scale"] as? Double
+        else { throw BridgeError(message: "CLICK_POINT needs x, y and the capture's scale") }
+        return try clickImagePoint(app, x: x, y: y, scale: scale)
+    }
+    if op == "TYPE_KEYS" {
+        // No element to set a value on; the keystrokes go wherever the app's
+        // own focus is, which is why this needs a visible confirmation after.
+        guard let text = request["text"] as? String else { throw BridgeError(message: "TYPE_KEYS needs text") }
+        typeText(text, pid: pid)
+        return ["ok": true, "detail": "typed \(text.count) characters", "mechanism": "CGEvent→pid (blind)"]
     }
     if op == "SCROLL_UP" || op == "SCROLL_DOWN" {
         let root = appElement(app)
@@ -740,6 +872,16 @@ func handle(_ request: [String: Any]) -> [String: Any] {
                 maxDepth: (request["depth"] as? Int) ?? 18
             )
             return ["id": id, "ok": true, "result": ["fingerprint": snap.fingerprint, "window": snap.window]]
+        case "capture":
+            guard let name = request["app"] as? String else { throw BridgeError(message: "capture needs app") }
+            let app = try runningApp(name)
+            return [
+                "id": id, "ok": true,
+                "result": try capture(
+                    app,
+                    width: (request["width"] as? Int) ?? 1000,
+                    quality: (request["quality"] as? Double) ?? 0.6),
+            ]
         case "act":
             return ["id": id, "ok": true, "result": try execute(request)]
         case "ping":

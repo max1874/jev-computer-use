@@ -2,7 +2,13 @@
 
 import time
 
-from .desktop import BridgeError, Desktop, StaleWindow
+from .desktop import (
+    PIXEL_CHANGE_THRESHOLD,
+    BridgeError,
+    Desktop,
+    StaleWindow,
+    thumbnail_difference,
+)
 from .model import action_space, choose, field_context, field_text
 from .questions import MAX_DECISIONS, MAX_STEPS, RISK_THRESHOLD
 
@@ -30,6 +36,7 @@ class Agent:
         risk_threshold=RISK_THRESHOLD,
         activate=False,
         menus=True,
+        pixels=True,
     ):
         goal = goal.strip() if isinstance(goal, str) else "\n".join(goal).strip()
         if not goal:
@@ -37,6 +44,10 @@ class Agent:
         self.approve = approve
         self.risk_threshold = risk_threshold
         self.pending_text = None
+        # Screenshots are a fallback for windows that publish nothing, not a
+        # default input. Set pixels=False to keep the run tree-only.
+        self.pixels = pixels
+        self.capture = None
         self.desktop = Desktop(app, menus=menus, activate=activate)
         try:
             page = self.desktop.observe()
@@ -96,7 +107,17 @@ class Agent:
             if not self.desktop.fresh(state["page"]):
                 state["page"] = self.desktop.observe()
             state["decision"] = None
-            decision = choose(state["page"], state["goal"], state["history"])
+            # A window that will not say what is in it gets photographed. This
+            # is the expensive, less reliable path, so it is entered only when
+            # the tree leaves nothing to choose from.
+            capture = None
+            if self.pixels and state["page"]["sparse"]:
+                try:
+                    capture = self.desktop.capture()
+                except BridgeError as error:
+                    state["capture_error"] = str(error)
+            self.capture = capture
+            decision = choose(state["page"], state["goal"], state["history"], capture=capture)
             state["decisions"].append(
                 {
                     **{k: v for k, v in decision.items() if k != "offered"},
@@ -138,7 +159,11 @@ class Agent:
 
             action = decision["action"]
             text, helper = None, None
-            if operation == "TYPE_TEXT":
+            if operation == "TYPE_KEYS":
+                text = decision.get("text")
+                if not text:
+                    raise ValueError("TYPE_KEYS came back without text; nothing was typed.")
+            elif operation == "TYPE_TEXT":
                 if not self.desktop.fresh(page):
                     raise StaleWindow("The window changed before the value was settled. Choose again.")
                 text = decision.get("text")
@@ -193,8 +218,21 @@ class Agent:
                 state["status"] = "blocked"
                 return self.snapshot()
             state["elapsed_ms"] = self._elapsed()
+            changed = state["page"]["fingerprint"] != before
+            if decision.get("pixels") and self.capture:
+                # The tree of a window like this hardly moves whatever happens
+                # inside it, so the picture is what says whether the click
+                # landed. A click that changed nothing visible missed.
+                try:
+                    after = self.desktop.capture()
+                    difference = thumbnail_difference(self.capture.get("thumbnail"), after.get("thumbnail"))
+                    if difference is not None:
+                        changed = difference >= PIXEL_CHANGE_THRESHOLD
+                        state["history"][-1]["pixel_difference"] = round(difference, 2)
+                except BridgeError:
+                    pass
             state["history"][-1].update(
-                window_changed=state["page"]["fingerprint"] != before,
+                window_changed=changed,
                 elapsed_ms=state["elapsed_ms"],
             )
             # Three operations that changed nothing visible is a stuck policy.
