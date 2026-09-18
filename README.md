@@ -147,6 +147,8 @@ uv run --env-file .env python examples/calculator.py   # six presses, verified
 uv run --env-file .env python examples/textedit.py     # generate and enter a value
 uv run --env-file .env python examples/run.py \
   --app "System Settings" --goal 'Turn on Dock auto-hide.' --activate
+
+uv run python examples/electron.py --app Lark   # no model, no key: it only looks
 ```
 
 ```text
@@ -222,6 +224,29 @@ a cheap way to read a window instead of photographing it.
 What survives is a much smaller class. Linear publishes three elements, no text
 and nothing to press, at any depth. For a window like that the tree really has
 nothing to offer.
+
+`examples/electron.py` reads one window at four depths and prints what each one
+saw, so none of this has to be taken on trust. It presses nothing, types
+nothing, activates nothing and calls no model:
+
+```text
+ depth  elements  named  coverage    text  typeable  sparse?     ms
+    18        37     32       1.0       5         0    False     48
+    26       101     54       1.0    2127         1    False    124
+    40       205    126       1.0    6030         1    False    332
+    60       205    126       1.0    6030         1    False    345
+```
+
+Run it against a native window to see the control: Finder reports the same 40
+elements and 1000 characters at every depth, because it never had anything
+below twelve levels to find.
+
+The `sparse?` column is worth reading closely, because on this window it is
+wrong in the comfortable direction. The shallow read never measured as sparse —
+coverage stays at 1.0, carried by a single element spanning the window — so the
+screenshot fallback would not have fired either. It was an empty table that
+nothing flagged, which is exactly how a measurement ends up supporting the
+wrong conclusion.
 
 So there is a second path, entered only when a window is sparse by measurement
 (little of the window described, almost no text, nothing editable — see
