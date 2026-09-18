@@ -10,6 +10,7 @@ import selectors
 import subprocess
 import threading
 import time
+from math import isqrt
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -138,16 +139,76 @@ SETTLE_MS = {
 }
 
 
+# A region is a quarter of the window's width and height, so a sixteenth of its
+# area, and they overlap by half so that a change straddling a boundary still
+# falls whole inside some region.
+THUMBNAIL_BLOCK = 4
+THUMBNAIL_STRIDE = 2
+
+
 def thumbnail_difference(before, after):
-    """Mean absolute difference between two 16x16 greyscale reductions, 0 to 255."""
+    """The biggest change in any one part of the window, 0 to 255.
+
+    Averaging the whole window was the obvious way to do this and it does not
+    work, because the thing being measured is local and the average is not. A
+    real change divided by an unchanged majority comes out near zero: pressing
+    a digit in Calculator, which is as unambiguous as an interface gets, scores
+    0.30 against a threshold of 2. A block of a real Lark window 341 points on
+    a side — a third of its width — scores 1.88 and is also read as nothing.
+    Three of those in a row and `Agent` calls the run stuck and stops it.
+
+    So the window is scored in overlapping regions and the loudest one wins. A
+    change confined to a sixteenth of the window now counts sixteen times for
+    what it is, and a change larger than that still reads as large, because the
+    regions overlap and one of them lies inside it.
+
+    Measured on the pairs this has to separate. Nothing happening: seven real
+    windows captured twice back to back score 0.00 to 0.19, and Calculator's
+    All Clear pressed against an already-clear display scores exactly 0.00.
+    Something happening: one digit 2.50, All Clear against a display holding
+    something 2.25 to 4.62 depending on what it held, an 85-point square at
+    reading contrast 7.50. Repeated presses give the same score to two decimals.
+
+    Not measured: a hover highlight under the pointer, which arithmetic puts
+    near 2 on a wide list row. Measuring it means taking the mouse away from
+    whoever is using the machine. It is the one case where this is more willing
+    than the average was, and the score is recorded on every step so a wrong
+    call can be read back off the history rather than guessed at.
+    """
     if not before or not after or len(before) != len(after):
         return None
-    return sum(abs(a - b) for a, b in zip(before, after)) / len(before)
+    side = isqrt(len(before))
+    if side * side != len(before) or side < THUMBNAIL_BLOCK:
+        # Not a square reduction; fall back to the plain average rather than
+        # inventing a geometry the caller never promised.
+        return sum(abs(a - b) for a, b in zip(before, after)) / len(before)
+    delta = [abs(a - b) for a, b in zip(before, after)]
+    cells = THUMBNAIL_BLOCK * THUMBNAIL_BLOCK
+    corners = range(0, side - THUMBNAIL_BLOCK + 1, THUMBNAIL_STRIDE)
+    return max(
+        sum(
+            delta[row * side + column]
+            for row in range(top, top + THUMBNAIL_BLOCK)
+            for column in range(left, left + THUMBNAIL_BLOCK)
+        )
+        / cells
+        for top in corners
+        for left in corners
+    )
 
 
-# Below this the window looks unchanged: a caret blink and a hover highlight
-# land under it, a menu or panel opening lands well above.
-PIXEL_CHANGE_THRESHOLD = 2.0
+# Below this the window looks unchanged. Nothing happening measures 0.00 to
+# 0.19 and the weakest real change measured 2.25, so the line goes in the
+# middle of that rather than against either edge — and nearer the quiet end,
+# because the two mistakes do not cost the same. A missed change is counted
+# towards the three that make `Agent` call the run stuck and stop it, so three
+# of them end the task. A change that was really nothing costs one more step
+# of a budget that already has a ceiling.
+#
+# The same control in a larger window is a smaller share of its region and so
+# scores lower, and a window large enough to need this path is the large case
+# by definition. That is the other reason not to sit on top of 2.25.
+PIXEL_CHANGE_THRESHOLD = 1.0
 
 
 # A window is sparse when the tree accounts for almost none of its area AND

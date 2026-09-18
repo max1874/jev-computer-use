@@ -810,8 +810,11 @@ func frontWindow(at point: CGPoint) -> (id: CGWindowID, pid: pid_t)? {
 ///
 /// An Electron window's accessibility fingerprint barely moves no matter what
 /// happens inside it, so the tree cannot tell whether a click landed. Comparing
-/// two of these can: it is coarse enough to ignore a caret blink and fine
-/// enough to notice a panel opening.
+/// two of these can, as long as the comparison is local: a 16x16 grid is coarse
+/// enough that a caret blink disappears into a cell, and fine enough that a
+/// pressed button or an opened panel owns several. See `thumbnail_difference`
+/// in desktop.py, which scores it in overlapping regions rather than averaging
+/// the grid, and says what happens when you average it instead.
 func thumbnail(_ image: CGImage) -> [Int] {
     let side = 16
     var pixels = [UInt8](repeating: 0, count: side * side)

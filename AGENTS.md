@@ -20,6 +20,12 @@ window → indexed elements → operation + target → guarded execution → obs
   — two lines, correct, silent — took the calculator task from 6 of 6 runs to
   1 of 8. Measure a new operation against a task that does not use it before
   offering it, not only against one that does.
+- A local change measured globally is not measured. Averaging a whole window
+  divided every real change by the unchanged majority around it, so pressing a
+  digit scored 0.30 against a threshold of 2 and a third of a window changing
+  scored 1.88. Both read as nothing happened. Score the parts and take the
+  loudest. Where the two mistakes cost differently, put the line nearer the
+  cheaper one and say which it is.
 - When a window measures as sparse, suspect the reader before the app. The
   first version of this project concluded from real measurements that Electron
   apps publish nothing, and was wrong: the traversal stopped above the web
