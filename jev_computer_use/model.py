@@ -241,8 +241,9 @@ def operation_distribution(payload, chosen, operations):
                 share = math.exp(alternative["logprob"]) / len(matches)
                 for name in matches:
                     weights[name] = weights.get(name, 0.0) + share
-            if chosen in weights and len(weights) > 1:
-                total = sum(weights.values())
+            total = sum(weights.values())
+            # Every alternative can underflow to zero, which is not a distribution.
+            if chosen in weights and len(weights) > 1 and total > 0:
                 return {name: round(value / total, 4) for name, value in sorted(weights.items())}
         return {}
     return {}
