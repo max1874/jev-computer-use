@@ -7,6 +7,7 @@ from .desktop import (
     BridgeError,
     Desktop,
     StaleWindow,
+    UnknownOutcome,
     thumbnail_difference,
 )
 from .model import action_space, choose, field_context, field_text
@@ -191,7 +192,36 @@ class Agent:
                 time.sleep(0.15)
                 result = {"detail": "waited", "mechanism": "sleep"}
             else:
-                result = self.desktop.act(action, page, text=text)
+                try:
+                    result = self.desktop.act(action, page, text=text)
+                except UnknownOutcome as error:
+                    # The operation was sent and its answer never came. It may
+                    # have run. Record the attempt, look at the window, and
+                    # stop: choosing again from here risks doing it twice, and
+                    # some operations must not happen twice.
+                    state["elapsed_ms"] = self._elapsed()
+                    state["history"].append(
+                        {
+                            "step": len(state["history"]) + 1,
+                            "operation": operation,
+                            "target": decision["target"],
+                            "label": action.get("label", operation) if action else operation,
+                            "text": text,
+                            "outcome": "unknown",
+                            "detail": str(error),
+                            "risk": decision["risk"],
+                            "elapsed_ms": state["elapsed_ms"],
+                        }
+                    )
+                    try:
+                        state["page"] = self.desktop.observe()
+                    except BridgeError:
+                        pass
+                    state["status"] = "blocked"
+                    state["note"] = (
+                        f"{operation} may or may not have run. Check the window before running anything else."
+                    )
+                    return self.snapshot()
             self.pending_text = None
             state["elapsed_ms"] = self._elapsed()
 

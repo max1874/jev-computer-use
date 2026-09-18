@@ -167,6 +167,7 @@ struct Element {
     var path: String
     var role: String
     var subrole: String
+    var identifier: String
     var label: String
     var value: String
     var enabled: Bool
@@ -190,6 +191,7 @@ struct Element {
             "frame": [Int(frame.minX), Int(frame.minY), Int(frame.width), Int(frame.height)],
         ]
         if !subrole.isEmpty { out["subrole"] = subrole }
+        if !identifier.isEmpty { out["identifier"] = identifier }
         if focused { out["focused"] = true }
         if let checked { out["checked"] = checked }
         if let selected { out["selected"] = selected }
@@ -323,6 +325,7 @@ final class Walker {
                             path: path,
                             role: role,
                             subrole: string(element, kAXSubroleAttribute),
+                            identifier: string(element, kAXIdentifierAttribute),
                             label: label(of: element, role: role),
                             value: checked == nil ? value : "",
                             enabled: enabled,
@@ -631,6 +634,8 @@ func capture(_ app: NSRunningApplication, width: Int, quality: Double) throws ->
         // Multiply an image point by this and add the origin to reach the screen.
         "scale": Double(rect.width) / Double(target),
         "origin": [Double(rect.minX), Double(rect.minY)],
+        "window_id": Int(id),
+        "window_size": [Double(rect.width), Double(rect.height)],
         "window_frame": [Int(rect.minX), Int(rect.minY), Int(rect.width), Int(rect.height)],
         "bytes": jpeg.count,
     ]
@@ -685,13 +690,30 @@ func thumbnail(_ image: CGImage) -> [Int] {
 /// Hence the two guards below: the app must be frontmost, and the point must
 /// not be covered. Everything on the accessibility path stays quiet and
 /// background; this does not, and cannot.
-func clickImagePoint(_ app: NSRunningApplication, x: Double, y: Double, scale: Double) throws -> [String: Any] {
+func clickImagePoint(
+    _ app: NSRunningApplication, x: Double, y: Double, scale: Double,
+    capturedWindow: CGWindowID?, capturedSize: [Double]?
+) throws -> [String: Any] {
     guard frontmostPID() == app.processIdentifier else {
         throw BridgeError(
             message: "refused: a real click goes wherever the pointer is, and "
                 + "\(app.localizedName ?? "the app") is not frontmost. Activate it first.")
     }
     let (id, rect) = try windowRect(app)
+    // The point was named in a picture of one window at one size. If either
+    // has changed, the scale that came with the picture no longer maps that
+    // point anywhere meaningful — the click would land by coincidence.
+    if let capturedWindow, capturedWindow != id {
+        throw BridgeError(message: "refused: the window changed since the screenshot; capture again")
+    }
+    if let capturedSize, capturedSize.count == 2 {
+        let moved = abs(capturedSize[0] - Double(rect.width)) > 1 || abs(capturedSize[1] - Double(rect.height)) > 1
+        if moved {
+            throw BridgeError(
+                message: "refused: the window was \(Int(capturedSize[0]))x\(Int(capturedSize[1])) when the "
+                    + "screenshot was taken and is now \(Int(rect.width))x\(Int(rect.height)); capture again")
+        }
+    }
     let point = CGPoint(x: rect.minX + x * scale, y: rect.minY + y * scale)
     guard rect.insetBy(dx: -2, dy: -2).contains(point) else {
         throw BridgeError(
@@ -778,7 +800,10 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         guard let x = request["x"] as? Double, let y = request["y"] as? Double,
             let scale = request["scale"] as? Double
         else { throw BridgeError(message: "CLICK_POINT needs x, y and the capture's scale") }
-        return try clickImagePoint(app, x: x, y: y, scale: scale)
+        return try clickImagePoint(
+            app, x: x, y: y, scale: scale,
+            capturedWindow: (request["window_id"] as? Int).map { CGWindowID($0) },
+            capturedSize: request["window_size"] as? [Double])
     }
     if op == "TYPE_KEYS" {
         // No element to set a value on; the keystrokes go wherever the app's
@@ -801,6 +826,23 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
     guard let path = request["path"] as? String else { throw BridgeError(message: "\(op) needs an element path") }
     let element = try resolve(app, path)
     let current = describe(element)
+    // A label alone does not identify a control: a list that reordered can put
+    // a different row with the same name under the same path. Role and
+    // AXIdentifier are what actually pin it down, when the app supplies them.
+    if let wantRole = request["expect_role"] as? String, !wantRole.isEmpty {
+        let actual = string(element, kAXRoleAttribute)
+        if actual != wantRole {
+            throw BridgeError(message: "stale: \(path) was a \(wantRole) and is now a \(actual)")
+        }
+    }
+    if let wantID = request["expect_id"] as? String, !wantID.isEmpty {
+        let actual = string(element, kAXIdentifierAttribute)
+        if actual != wantID {
+            throw BridgeError(
+                message: "stale: \(path) had identifier \"\(wantID)\" and now has "
+                    + (actual.isEmpty ? "none" : "\"\(actual)\""))
+        }
+    }
     if let expect = request["expect"] as? String, !expect.isEmpty {
         // Trees shift between observing and acting; a stale path presses the
         // wrong thing. Refuse rather than guess.
@@ -830,21 +872,44 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         return ["ok": true, "detail": current, "mechanism": action]
     case "TYPE_TEXT":
         guard let text = request["text"] as? String else { throw BridgeError(message: "TYPE_TEXT needs text") }
-        AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        // Setting the value replaces the field's contents outright, which is
-        // what "enter or replace text" means, and it never touches the keyboard.
+        // This operation means "replace the whole value". Writing the value is
+        // the only mechanism that means exactly that; the keyboard fallback has
+        // to select the old contents first, or it would quietly become an
+        // insert and leave the field holding something nobody asked for.
+        let focused = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFTypeRef)
-        if result == .success {
-            let after = string(element, kAXValueAttribute)
-            guard after.contains(text) || text.contains(after) else {
-                throw BridgeError(message: "the field did not accept the value (now \"\(after)\")")
+        var mechanism = "AXValue"
+        if result != .success {
+            guard focused == .success else {
+                throw BridgeError(
+                    message: "the field refused both the value (AXError \(result.rawValue)) and focus "
+                        + "(AXError \(focused.rawValue)); typing now would go somewhere unknown")
             }
-            return ["ok": true, "detail": describe(element), "mechanism": "AXValue"]
+            try pressKey("cmd+a", pid: pid)
+            sleepMs(30)
+            typeText(text, pid: pid)
+            sleepMs(60)
+            mechanism = "CGEvent→pid (select all, then type)"
         }
-        // Some fields refuse AXValue but accept real key events; report which
-        // mechanism actually ran rather than hiding the fallback.
-        typeText(text, pid: pid)
-        return ["ok": true, "detail": describe(element), "mechanism": "CGEvent→pid"]
+        // Read back and require the value to actually be the value. A field
+        // that truncated, decorated or ignored the write is not a success, and
+        // a substring test would call two of those three a success.
+        let after = string(element, kAXValueAttribute)
+        let settled = after.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wanted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if settled == wanted {
+            return ["ok": true, "detail": describe(element), "mechanism": mechanism, "verified": true]
+        }
+        // Some fields expose no readable value at all. That is not a failure,
+        // but it is not confirmation either, and the caller must be told which.
+        if after.isEmpty, !settable(element, kAXValueAttribute) {
+            return [
+                "ok": true, "detail": describe(element), "mechanism": mechanism, "verified": false,
+                "unverified": "this field exposes no readable value, so the write could not be confirmed",
+            ]
+        }
+        throw BridgeError(
+            message: "the field did not take the value: wanted \"\(wanted)\", holds \"\(settled)\"")
     case "SELECT":
         guard let choice = request["option"] as? Int else { throw BridgeError(message: "SELECT needs an option") }
         var pool = children(element)

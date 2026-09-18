@@ -91,8 +91,10 @@ def action_space(page, pixels=False):
         for key in ("value", "checked", "selected"):
             if source.get(key) not in (None, ""):
                 shown[key] = source[key]
-        # The guard that must still hold at execution time.
+        # The identity that must still hold at execution time. The identifier
+        # is the strongest of these and the label the weakest, so all three go.
         expect = source["label"] or source["role"]
+        identity = {"expect": expect, "expect_role": source["role"], "expect_id": source.get("identifier", "")}
         for operation in operations:
             if operation == "SELECT":
                 for position, option in enumerate(source.get("options", [])):
@@ -101,7 +103,7 @@ def action_space(page, pixels=False):
                         "op": "SELECT",
                         "path": source["path"],
                         "option": option["child"],
-                        "expect": expect,
+                        **identity,
                         "label": f"{shown['label']} → {option['label']}",
                     }
                 if source.get("options"):
@@ -113,7 +115,7 @@ def action_space(page, pixels=False):
                     "operation": operation,
                     "op": operation,
                     "path": source["path"],
-                    "expect": expect,
+                    **identity,
                     "label": shown["label"],
                     "role": shown["role"],
                     "value": shown.get("value", ""),

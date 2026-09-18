@@ -6,6 +6,7 @@ accessibility traversal rather than a process launch.
 
 import json
 import os
+import selectors
 import subprocess
 import threading
 import time
@@ -21,6 +22,16 @@ class StaleWindow(Exception):
 
 class BridgeError(RuntimeError):
     """The bridge refused an operation. Nothing was executed."""
+
+
+class UnknownOutcome(RuntimeError):
+    """The request was sent and no answer came back.
+
+    This is the one failure that must not be retried. The operation may have
+    run: a press that reached the app and then lost its reply looks exactly
+    like a press that never arrived. Observe the window and decide from what
+    is there, rather than sending it again.
+    """
 
 
 def binary():
@@ -48,24 +59,54 @@ class Bridge:
         )
         self.lock = threading.Lock()
         self.counter = 0
+        self.selector = selectors.DefaultSelector()
+        self.selector.register(self.process.stdout, selectors.EVENT_READ)
 
-    def call(self, method, **body):
+    def _readline(self, timeout):
+        """One line, or None if it did not arrive in time."""
+        if self.selector.select(timeout):
+            return self.process.stdout.readline()
+        return None
+
+    def call(self, method, timeout=20, mutating=False, **body):
         with self.lock:
             if self.process.poll() is not None:
-                raise BridgeError("the accessibility bridge exited")
+                raise BridgeError("the accessibility bridge exited before the request was sent")
             self.counter += 1
             request = {"id": self.counter, "method": method, **body}
-            self.process.stdin.write(json.dumps(request) + "\n")
-            self.process.stdin.flush()
-            line = self.process.stdout.readline()
-        if not line:
-            raise BridgeError("the accessibility bridge stopped responding")
+            try:
+                self.process.stdin.write(json.dumps(request) + "\n")
+                self.process.stdin.flush()
+            except (OSError, ValueError) as error:
+                # Never left this process, so nothing can have happened.
+                raise BridgeError(f"the request was not sent: {error}") from None
+            # Past this line the operation may have run, whatever comes back.
+            line = self._readline(timeout)
+
+        if line is None or line == "":
+            lost = "timed out" if line is None else "the bridge closed the pipe"
+            if mutating:
+                raise UnknownOutcome(
+                    f"{method} was sent and {lost} after {timeout}s. It may have run. "
+                    "Observe the window rather than sending it again."
+                )
+            raise BridgeError(f"{method} {lost} after {timeout}s")
         answer = json.loads(line)
+        if answer.get("id") != request["id"]:
+            # The pipe is one request at a time; a mismatch means it desynced.
+            raise UnknownOutcome(
+                f"expected a reply to {request['id']} and got {answer.get('id')}; the bridge is out of step"
+            )
         if not answer.get("ok"):
+            # The bridge refused before acting: these are all pre-flight checks.
             raise BridgeError(answer.get("error", "unknown bridge error"))
         return answer["result"]
 
     def close(self):
+        try:
+            self.selector.close()
+        except Exception:
+            pass
         if self.process.poll() is None:
             try:
                 self.process.stdin.close()
@@ -192,8 +233,9 @@ class Desktop:
         if "path" in action:
             request["path"] = action["path"]
             # The element at that path must still be the one that was chosen.
-            if action.get("expect"):
-                request["expect"] = action["expect"]
+            for guard in ("expect", "expect_role", "expect_id"):
+                if action.get(guard):
+                    request[guard] = action[guard]
         if "menu" in action:
             request["menu"] = action["menu"]
         if "option" in action:
@@ -206,7 +248,7 @@ class Desktop:
         if text is not None:
             request["text"] = text
         try:
-            result = self.bridge.call("act", **request)
+            result = self.bridge.call("act", mutating=True, timeout=30, **request)
         except BridgeError as error:
             if str(error).startswith("stale:") or "is stale" in str(error):
                 raise StaleWindow(str(error)) from None
