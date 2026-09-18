@@ -84,7 +84,9 @@ class Agent:
         elements, targets, _ = action_space(self.state["page"])
         return {
             **{k: v for k, v in self.state.items() if k != "page"},
-            "window": {k: self.state["page"][k] for k in ("app", "window", "fingerprint", "text")},
+            "window": {
+                k: self.state["page"][k] for k in ("app", "window", "fingerprint", "text", "truncated")
+            },
             "elements": elements,
             "menus": self.state["page"].get("menus", []),
             "targets": {k: sorted(v) for k, v in targets.items()},

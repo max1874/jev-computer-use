@@ -373,6 +373,17 @@ def choose(page, goal, history, capture=None):
         ],
         "offered_operations": operations,
     }
+    # Only when it happened. The bridge has always reported this and nothing
+    # read it, so a window with more elements than the limit allows reached the
+    # model looking complete — the one kind of wrong table that cannot be
+    # noticed from the inside. Said conditionally, so a window that fits pays
+    # nothing for the warning.
+    if page.get("truncated"):
+        state["table_is_incomplete"] = (
+            f"This window has more elements than the {len(elements)} listed; the rest were cut off. "
+            "What you are looking for may exist and not be here. Scrolling brings different "
+            "elements into view. Choosing something that merely looks close is worse than BLOCKED."
+        )
     if capture:
         state["screenshot"] = {
             "why": "This window exposes almost nothing to the accessibility tree, so most of what "

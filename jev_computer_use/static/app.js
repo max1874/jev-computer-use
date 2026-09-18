@@ -26,7 +26,13 @@ function escape(value) {
 
 function renderElements(state) {
   const chosen = state.decision && state.decision.target;
-  $("count").textContent = state.elements.length ? `${state.elements.length} indexed` : "";
+  // A cut-off table is the one kind of wrong table that looks right, so say so
+  // where the count is, rather than leaving the reader to wonder.
+  const cut = state.window && state.window.truncated;
+  $("count").textContent = state.elements.length
+    ? `${state.elements.length} indexed${cut ? " · cut off at the limit" : ""}`
+    : "";
+  $("count").classList.toggle("warn", Boolean(cut));
   $("elements").innerHTML =
     state.elements
       .map((element) => {

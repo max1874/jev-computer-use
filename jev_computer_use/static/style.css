@@ -141,3 +141,5 @@ footer { border-top: 1px solid var(--line); padding: 8px 18px; display: flex; ga
 .pill.needs_approval { color: #241a02; background: var(--warn); }
 
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+.tag.warn { color: var(--bad, #d2544d); }
