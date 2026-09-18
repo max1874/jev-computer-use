@@ -317,6 +317,11 @@ func operations(for element: AXUIElement, role: String, enabled: Bool) -> [Strin
     if role == kAXPopUpButtonRole || role == "AXMenuButton" { out.append("SELECT") }
     if available.contains(kAXIncrementAction) { out.append("INCREMENT") }
     if available.contains(kAXDecrementAction) { out.append("DECREMENT") }
+    // AXShowMenu is deliberately not offered. It works, but showing a menu
+    // requires macOS to activate the app, so the one operation that opens a
+    // context menu without aiming a right-click also takes the screen — and
+    // the menu it opens is a separate window this snapshot does not see, so
+    // there is no way to tell whether it worked. See "What is not offered".
     return out
 }
 
@@ -1021,6 +1026,8 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         guard result == .success else { throw BridgeError(message: "press failed: AXError \(result.rawValue)") }
         return ["ok": true, "detail": current, "mechanism": "AXPress"].merging(focusFacts(focusBefore, app)) { a, _ in a }
     case "INCREMENT", "DECREMENT":
+        // Actions the element published about itself. Asking the app to step
+        // its own control moves nothing on screen and aims at nothing.
         let action = op == "INCREMENT" ? kAXIncrementAction : kAXDecrementAction
         let result = AXUIElementPerformAction(element, action as CFString)
         guard result == .success else { throw BridgeError(message: "\(op) failed: AXError \(result.rawValue)") }

@@ -126,6 +126,9 @@ SETTLE_MS = {
     "MENU": 220,
     "SELECT": 220,
     "PRESS": 60,
+    # Stepping a control is the app changing its own value, done immediately.
+    "INCREMENT": 60,
+    "DECREMENT": 60,
     "TYPE_TEXT": 25,
     "WAIT": 150,
     # A web interface answers a click by re-rendering, which is slower than a

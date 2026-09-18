@@ -43,8 +43,23 @@ accessibility tree → │ operation                    │
                               observe again
 ```
 
-Operations: `PRESS`, `TYPE_TEXT`, `SELECT`, `MENU`, `SCROLL_UP`, `SCROLL_DOWN`,
-`PRESS_RETURN`, `PRESS_ESCAPE`, `WAIT`, `DONE`, `BLOCKED`.
+Operations: `PRESS`, `TYPE_TEXT`, `SELECT`, `MENU`, `INCREMENT`, `DECREMENT`,
+`SCROLL_UP`, `SCROLL_DOWN`, `PRESS_RETURN`, `PRESS_ESCAPE`, `WAIT`, `DONE`,
+`BLOCKED`.
+
+### What is not offered
+
+`AXShowMenu` opens an element's context menu — the one a right-click opens —
+and it works. It is still not offered, for two reasons found by running it.
+macOS activates an app to show a menu, so the operation that needs no pointer
+takes the screen instead; Finder went from `active: False` to `active: True`
+across a single call. And the menu it opens is a separate window that a
+snapshot of the focused window cannot see, so there is no way to report whether
+it worked, or to choose anything in it afterwards.
+
+`AXScrollToVisible` is published by almost every node in a web view and is
+useless here for the opposite reason: offscreen elements never reach the table
+in the first place, so everything that could be scrolled to is already in view.
 
 Every target head is answered on the same observed state, and only the head
 matching the chosen operation can execute. Two decisions, one round trip —

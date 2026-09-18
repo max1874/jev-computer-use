@@ -31,6 +31,10 @@ TARGETED = {
     "TYPE_TEXT": "Enter or replace the whole contents of an editable field.",
     "SELECT": "Choose a value from a pop-up button's menu.",
     "MENU": "Run a menu-bar command by name, without opening the menu first.",
+    # Actions the element published about itself. Asking the app to step its
+    # own control moves no pointer and aims at nothing.
+    "INCREMENT": "Step a slider, stepper or similar control up by one.",
+    "DECREMENT": "Step a slider, stepper or similar control down by one.",
 }
 
 # Offered only when the window will not say what is in it, and strictly worse
