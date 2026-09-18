@@ -1177,8 +1177,13 @@ func handle(_ request: [String: Any]) -> [String: Any] {
             )
             return ["id": id, "ok": true, "result": snapshotJSON(snap)]
         case "fingerprint":
-            // The same semantic material as a snapshot, without building the
-            // element table or re-reading the menus: the cheap staleness check.
+            // The same semantic material as a snapshot, minus the menus and the
+            // JSON for the element table. That is a smaller answer, not a
+            // cheaper question: the traversal is identical and the accessibility
+            // reads are what the time goes on, so this costs within noise of a
+            // full snapshot — 77 ms against 68 ms on Calculator, 125 against 117
+            // on Finder. Anything that wants a genuinely cheap staleness check
+            // needs a different question, not this one with less returned.
             guard let name = request["app"] as? String else { throw BridgeError(message: "fingerprint needs app") }
             let snap = try snapshot(
                 app: name,

@@ -43,9 +43,8 @@ accessibility tree → │ operation                    │
                               observe again
 ```
 
-Operations: `PRESS`, `TYPE_TEXT`, `SELECT`, `MENU`, `INCREMENT`, `DECREMENT`,
-`SCROLL_UP`, `SCROLL_DOWN`, `PRESS_RETURN`, `PRESS_ESCAPE`, `WAIT`, `DONE`,
-`BLOCKED`.
+Operations: `PRESS`, `TYPE_TEXT`, `SELECT`, `MENU`, `SCROLL_UP`, `SCROLL_DOWN`,
+`PRESS_RETURN`, `PRESS_ESCAPE`, `WAIT`, `DONE`, `BLOCKED`.
 
 ### What is not offered
 
@@ -60,6 +59,16 @@ it worked, or to choose anything in it afterwards.
 `AXScrollToVisible` is published by almost every node in a web view and is
 useless here for the opposite reason: offscreen elements never reach the table
 in the first place, so everything that could be scrolled to is already in view.
+
+`INCREMENT` and `DECREMENT` are the expensive lesson. The bridge has derived
+and executed both from the start; adding them to the offered set is one line,
+they work, and they take no screen. Calculator publishes them on "Show Sidebar"
+and "Mode". Offering them put two more heads in every answer and two more ways
+to be wrong in a task that needs neither, and on "compute 12 times 34" against
+`deepseek-flash` the score went from **6 of 6 runs correct in 6 operations** to
+**1 of 8**, the rest wandering into the 40-operation budget. The element table
+was byte-for-byte identical in both; the only difference was the size of the
+choice. An operation that is free to implement is not free to offer.
 
 Every target head is answered on the same observed state, and only the head
 matching the chosen operation can execute. Two decisions, one round trip —
@@ -164,7 +173,7 @@ active.
 - **One request per decision cycle.** The operation head and every target head
   share one observed state.
 - **The tree, not the pixels.** An accessibility snapshot of a TextEdit window
-  is 4 ms and a few hundred tokens. A screenshot is an image, a resize
+  is 19 ms and a few hundred tokens. A screenshot is an image, a resize
   sensitivity, and a coordinate the model has to be right about.
 - **One long-lived bridge.** The Swift helper stays up for the session, so a
   step costs one traversal, not a process launch.
@@ -242,18 +251,29 @@ development a click aimed at Calculator landed in a browser window covering it.
 
 ## Evidence and limits
 
-Measured on this machine (M-series, macOS 26), median of 20:
+Measured on this machine (M-series, macOS 26), median of 7, end to end from
+Python — the JSON-RPC round trip to the Swift helper included, because that is
+what a caller pays. An earlier version of this table reported much smaller
+numbers for the same work, from inside Swift; those are not what anyone
+experiences and are not comparable to these.
 
 | | |
 |---|---|
-| snapshot, TextEdit window (4 elements) | **4.2 ms** |
-| snapshot, Chrome window (20 elements) | **11.5 ms** |
-| snapshot, Lark window (173 elements, 25 levels deep) | **169 ms** |
-| freshness check (no element table) | **3.5 ms** |
-| `TYPE_TEXT` into a native field, erase + write + verify | **35 ms** |
-| `TYPE_TEXT` into a web composer (Lark), same | **213 ms** |
-| one whole step, act + settle + observe | **43 ms** |
-| bridge start, once per session | **57 ms** |
+| snapshot, TextEdit window (4 elements, 2 levels) | **19.2 ms** |
+| snapshot, Calculator window (24 elements, 5 levels) | **67.6 ms** |
+| snapshot, Finder window (47 elements, 7 levels) | **116.7 ms** |
+| snapshot, Lark window (201 elements, 39 levels) | **281.4 ms** |
+| freshness check, TextEdit / Calculator / Finder / Lark | **16.6 / 77.4 / 124.9 / 253.4 ms** |
+| `TYPE_TEXT` into a native document (TextEdit) | **152 ms** |
+| `TYPE_TEXT` into a web composer (Lark) | **207 ms** |
+| one whole step, act + settle + observe (Calculator) | **134 ms** |
+| bridge start, once per session | **149 ms** |
+
+The freshness check is not the cheap one it was described as. It asks the same
+question as a snapshot and returns less of the answer: same traversal, same
+accessibility reads, and those are where the time goes. It comes in within
+noise of a full snapshot on every window measured. A genuinely cheap staleness
+check would have to be a different question.
 
 With a real model, `deepseek-flash` over the public API, on
 `examples/calculator.py` — press `1`, `2`, `×`, `3`, `4`, `=` and then notice
@@ -261,11 +281,17 @@ you are done:
 
 | | |
 |---|---|
-| correct result, verified by reading the display | **4 / 4 runs** |
-| operations per run | 6 |
-| task wall clock | **7.5 s** (median) |
-| decision latency | **889 ms** (median of 25 calls) |
-| share of wall clock spent waiting on the model | **83%** |
+| correct result, verified by reading the display | **6 / 6 runs** |
+| operations per run | 6, every run |
+| task wall clock | **6.9 s** (median) |
+| decision latency | **744 ms** (median of 42 calls) |
+| share of wall clock spent waiting on the model | **78%** |
+| runs that brought the app to the front | **0** |
+
+Six runs is a small sample and it is worth saying what a small sample hides. An
+earlier version of this table said 4 of 4, and a later build that differed only
+by offering two more operations scored 1 of 8 — see "What is not offered". Four
+clean runs are not evidence that the next four will be clean.
 
 **The harness is 43 ms per step. The model is 889 ms. Twenty to one.**
 

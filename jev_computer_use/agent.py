@@ -116,8 +116,15 @@ class Agent:
                 raise ValueError("This run has stopped. Start a fresh agent.")
             if state["started_at"] is None:
                 state["started_at"] = time.perf_counter()
+            # Running out of budget is a way for a run to end, not a way for it
+            # to break. Raising here threw a traceback out of `run()` at the
+            # caller, past a history the caller wanted, for the most ordinary
+            # outcome there is: the model did not finish in time.
             if len(state["decisions"]) >= MAX_DECISIONS:
-                raise ValueError(f"Reached the {MAX_DECISIONS}-decision budget")
+                state["status"] = "blocked"
+                state["note"] = f"Reached the {MAX_DECISIONS}-decision budget without finishing."
+                state["elapsed_ms"] = self._elapsed()
+                return self.snapshot()
             if not self.desktop.fresh(state["page"]):
                 state["page"] = self.desktop.observe()
             state["decision"] = None
@@ -191,7 +198,9 @@ class Agent:
 
             if len(state["history"]) >= MAX_STEPS:
                 state["status"] = "blocked"
-                raise ValueError(f"Stopped at the {MAX_STEPS}-operation budget")
+                state["note"] = f"Stopped at the {MAX_STEPS}-operation budget without finishing."
+                state["elapsed_ms"] = self._elapsed()
+                return self.snapshot()
 
             action = decision["action"]
             text, helper = None, None

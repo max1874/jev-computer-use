@@ -14,6 +14,12 @@ window → indexed elements → operation + target → guarded execution → obs
 - No screenshots on the tree path. Reaching for pixels because the reader is
   lazy is a bug; the fallback is for windows that genuinely publish nothing,
   and `desktop.sparseness` decides that by measurement, not by vibes.
+- Adding an operation costs accuracy on every task that does not need it. The
+  action space is the choice the model is making, so widening it is not free
+  even when the new operation works perfectly. Offering INCREMENT and DECREMENT
+  — two lines, correct, silent — took the calculator task from 6 of 6 runs to
+  1 of 8. Measure a new operation against a task that does not use it before
+  offering it, not only against one that does.
 - When a window measures as sparse, suspect the reader before the app. The
   first version of this project concluded from real measurements that Electron
   apps publish nothing, and was wrong: the traversal stopped above the web
