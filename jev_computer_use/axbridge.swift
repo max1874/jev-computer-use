@@ -12,6 +12,7 @@
 
 import AppKit
 import ApplicationServices
+import Carbon
 import CryptoKit
 import Foundation
 
@@ -592,17 +593,85 @@ func pressKey(_ combo: String, pid: pid_t) throws {
     up.postToPid(pid)
 }
 
+/// Every character the current keyboard layout can produce, mapped back to the
+/// key and the modifiers that produce it.
+///
+/// A synthetic key event can carry a character on a virtual key of zero, and a
+/// Cocoa text field will accept it. Chromium will not. Its key handling starts
+/// from the key that was pressed and derives the character from it, so an event
+/// with no real key behind it arrives at the web page as nothing — which is why
+/// typing into Lark's composer silently did nothing while `cmd+a` and `delete`,
+/// which carry real keys, worked on the same element in the same state.
+///
+/// So a character is typed the way a keyboard types it: the key that bears it,
+/// plus the modifiers that select it. The table is built once by asking the
+/// active layout what each key produces under each modifier combination, which
+/// means a non-US layout types its own characters rather than mojibake.
+let keyboardLayout: [Character: (code: CGKeyCode, flags: CGEventFlags)] = {
+    var map: [Character: (CGKeyCode, CGEventFlags)] = [:]
+    guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+        let pointer = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
+    else { return map }
+    let data = Unmanaged<CFData>.fromOpaque(pointer).takeUnretainedValue() as Data
+    // Plainest first, so a character that needs no modifier never gets recorded
+    // as one that does.
+    let combinations: [(UInt32, CGEventFlags)] = [
+        (0, []),
+        (UInt32(shiftKey) >> 8, .maskShift),
+        (UInt32(optionKey) >> 8, .maskAlternate),
+        ((UInt32(shiftKey) | UInt32(optionKey)) >> 8, [.maskShift, .maskAlternate]),
+    ]
+    let keyboardType = UInt32(LMGetKbdType())
+    data.withUnsafeBytes { buffer in
+        guard let layout = buffer.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return }
+        for (modifiers, flags) in combinations {
+            for code in 0..<CGKeyCode(128) {
+                var dead: UInt32 = 0
+                var length = 0
+                var characters = [UniChar](repeating: 0, count: 8)
+                let status = UCKeyTranslate(
+                    layout, code, UInt16(kUCKeyActionDisplay), modifiers, keyboardType,
+                    OptionBits(kUCKeyTranslateNoDeadKeysBit), &dead, characters.count, &length,
+                    &characters)
+                guard status == noErr, length == 1, let scalar = UnicodeScalar(characters[0]),
+                    !CharacterSet.controlCharacters.contains(scalar)
+                else { continue }
+                let character = Character(scalar)
+                if map[character] == nil { map[character] = (code, flags) }
+            }
+        }
+    }
+    return map
+}()
+
 func typeText(_ text: String, pid: pid_t) {
-    for scalar in text.unicodeScalars {
-        var chars = Array(String(scalar).utf16)
-        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-            let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
-        else { continue }
-        down.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: &chars)
-        up.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: &chars)
-        down.postToPid(pid)
-        sleepMs(4)
-        up.postToPid(pid)
+    for character in text {
+        if let key = keyboardLayout[character] {
+            // Nothing else is attached to the event: this is the shape that is
+            // known to reach web content, and overriding the character would
+            // only put back the thing Chromium rejects.
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: key.code, keyDown: true),
+                let up = CGEvent(keyboardEventSource: nil, virtualKey: key.code, keyDown: false)
+            else { continue }
+            down.flags = key.flags
+            up.flags = key.flags
+            down.postToPid(pid)
+            sleepMs(4)
+            up.postToPid(pid)
+        } else {
+            // Emoji, CJK, anything this layout has no key for. A native field
+            // takes it; web content may not, and there is no other way to send
+            // a character that no key produces.
+            var chars = Array(String(character).utf16)
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+                let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+            else { continue }
+            down.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: &chars)
+            up.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: &chars)
+            down.postToPid(pid)
+            sleepMs(4)
+            up.postToPid(pid)
+        }
         sleepMs(4)
     }
 }
