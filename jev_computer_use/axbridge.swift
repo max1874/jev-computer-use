@@ -907,10 +907,20 @@ func clickImagePoint(
                 + "Raise \(app.localizedName ?? "the app") first, or choose a point that is not occluded.")
     }
     let restore = CGEvent(source: nil)?.location
-    for type in [CGEventType.mouseMoved, .leftMouseDown, .leftMouseUp] {
-        guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
+    // All three are built before any of them is posted. Building the mouse-up
+    // lazily, after the mouse-down had already gone to the window server,
+    // would leave the button held down on a real machine and report it as a
+    // click that failed. Nothing can recover from that afterwards, so the only
+    // failure this is allowed to have is one that happens before it starts.
+    let sequence: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp]
+    let events: [CGEvent] = try sequence.map { type in
+        guard let event = CGEvent(
+            mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
         else { throw BridgeError(message: "could not build a click event") }
         event.setIntegerValueField(.mouseEventClickState, value: 1)
+        return event
+    }
+    for (type, event) in zip(sequence, events) {
         event.post(tap: .cghidEventTap)
         sleepMs(type == .mouseMoved ? 30 : 40)
     }
