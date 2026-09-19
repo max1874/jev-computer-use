@@ -267,7 +267,13 @@ So there is a second path, entered only when a window is sparse by measurement
 - It **sends your screen to the model.** The whole window, whatever is in it.
 - It **cannot be verified by the tree.** These windows' fingerprints barely
   move whatever happens inside them, so captures carry a 16×16 greyscale
-  reduction and a pixel operation is judged by comparing two of them.
+  reduction and a pixel operation is judged by comparing two of them. The
+  comparison is per region, not per window: averaging the whole thing divides
+  a real change by the unchanged majority around it, which scored a pressed
+  digit at 0.30 and a third of a window changing at 1.88, both under a
+  threshold of 2 and both therefore recorded as nothing happening. Scoring
+  sixteenths of the window and taking the loudest separates cleanly — 0.00 to
+  0.19 when nothing happened, 2.25 and up when something did.
 
 Two guards stand in front of it. The app must be frontmost, and the point must
 not be occluded — the window list is ordered front to back, so the code can ask
