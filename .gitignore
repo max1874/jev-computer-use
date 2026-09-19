@@ -2,7 +2,7 @@
 .venv/
 __pycache__/
 *.pyc
-jev_computer_use/bin/
+open_computer_use/bin/
 dist/
 build/
 recordings/

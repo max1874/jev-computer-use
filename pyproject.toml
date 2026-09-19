@@ -1,5 +1,5 @@
 [project]
-name = "jev-computer-use"
+name = "open-computer-use"
 version = "0.1.0"
 description = "A macOS computer-use agent that chooses instead of generating. Accessibility tree first, pixels only as a last resort."
 readme = "README.md"
@@ -8,18 +8,18 @@ requires-python = ">=3.11"
 dependencies = ["httpx[http2]>=0.28,<1"]
 
 [project.urls]
-Homepage = "https://github.com/max1874/jev-computer-use"
+Homepage = "https://github.com/max1874/open-computer-use"
 
 [project.scripts]
-jev-cu = "jev_computer_use.demo:main"
+open-computer-use = "open_computer_use.demo:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["jev_computer_use"]
-artifacts = ["jev_computer_use/bin/axbridge"]
+packages = ["open_computer_use"]
+artifacts = ["open_computer_use/bin/axbridge"]
 
 [dependency-groups]
 dev = ["ruff>=0.14,<1"]

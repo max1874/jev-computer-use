@@ -1,6 +1,9 @@
-# jev-computer-use ⌘
+# open-computer-use ⌘
 
-**A macOS computer-use agent with a dynamic, indexed action space.**
+**A macOS computer-use agent with interchangeable model backends and a dynamic, indexed action space.**
+
+Run it with an OpenAI-compatible model or the optional Jev backend. The macOS
+accessibility bridge and execution loop run independently of Codex.
 
 The tree first: no screenshots, no coordinates, and it works on a window you
 are not looking at. Pixels only when an app publishes nothing — and then it
@@ -103,11 +106,11 @@ call on the critical path; a rating in the same structured answer is free.
 ## Try it
 
 ```bash
-git clone https://github.com/max1874/jev-computer-use.git
-cd jev-computer-use
+git clone https://github.com/max1874/open-computer-use.git
+cd open-computer-use
 uv sync
 cp .env.example .env     # add JEV_API_KEY, or DECISION_API_KEY, or both
-uv run jev-cu
+uv run open-computer-use
 ```
 
 The inspector opens on **http://127.0.0.1:8767**: the numbered element table,
@@ -153,7 +156,7 @@ the model's own confidence instead.
 ## Use the library
 
 ```python
-from jev_computer_use import Agent
+from open_computer_use import Agent
 
 with Agent("TextEdit", "Replace the text with a haiku about the menu bar.") as agent:
     for state in agent.run():
@@ -491,12 +494,12 @@ Known limits:
 
 | File | Job |
 | --- | --- |
-| [`axbridge.swift`](jev_computer_use/axbridge.swift) | The accessibility snapshot, the indexed table, and guarded execution |
-| [`agent.py`](jev_computer_use/agent.py) | The loop, the guard gate, and the staleness handling |
-| [`model.py`](jev_computer_use/model.py) | The action space and the one request that fills every head |
-| [`desktop.py`](jev_computer_use/desktop.py) | The long-lived bridge and the settle policy |
-| [`questions.py`](jev_computer_use/questions.py) | The instructions and the budgets |
-| [`demo.py`](jev_computer_use/demo.py) | The local inspector |
+| [`axbridge.swift`](open_computer_use/axbridge.swift) | The accessibility snapshot, the indexed table, and guarded execution |
+| [`agent.py`](open_computer_use/agent.py) | The loop, the guard gate, and the staleness handling |
+| [`model.py`](open_computer_use/model.py) | The action space and the one request that fills every head |
+| [`desktop.py`](open_computer_use/desktop.py) | The long-lived bridge and the settle policy |
+| [`questions.py`](open_computer_use/questions.py) | The instructions and the budgets |
+| [`demo.py`](open_computer_use/demo.py) | The local inspector |
 
 `scripts/build.sh` compiles the bridge with `swiftc` and no dependencies.
 

@@ -767,7 +767,7 @@ func capture(_ app: NSRunningApplication, width: Int, quality: Double) throws ->
     }
     let (id, rect) = try windowRect(app)
     let file = FileManager.default.temporaryDirectory
-        .appendingPathComponent("jev-cu-\(UUID().uuidString).png")
+        .appendingPathComponent("open-computer-use-\(UUID().uuidString).png")
     defer { try? FileManager.default.removeItem(at: file) }
     let task = Process()
     task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -1276,7 +1276,7 @@ func emit(_ payload: [String: Any]) {
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 let usage = """
-axbridge — accessibility snapshots and guarded execution for jev-computer-use
+axbridge — accessibility snapshots and guarded execution for open-computer-use
 
   axbridge serve                 JSON-RPC over stdin/stdout, one request per line
   axbridge status                permissions and frontmost app, as JSON

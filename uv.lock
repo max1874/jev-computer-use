@@ -107,7 +107,7 @@ wheels = [
 ]
 
 [[package]]
-name = "jev-computer-use"
+name = "open-computer-use"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

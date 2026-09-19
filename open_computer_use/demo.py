@@ -58,7 +58,7 @@ def serialise(agent):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "jev-computer-use"
+    server_version = "open-computer-use"
 
     def guard(self):
         host = (self.headers.get("Host") or "").split(":")[0]
@@ -159,8 +159,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Local inspector for jev-computer-use")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("JEV_CU_PORT", 8767)))
+    parser = argparse.ArgumentParser(description="Local inspector for open-computer-use")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("OPEN_COMPUTER_USE_PORT", os.environ.get("JEV_CU_PORT", 8767))))
     parser.add_argument("--no-open", action="store_true")
     options = parser.parse_args()
     server = HTTPServer(("127.0.0.1", options.port), Handler)

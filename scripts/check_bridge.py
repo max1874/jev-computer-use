@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from jev_computer_use.desktop import BridgeError, Desktop, StaleWindow  # noqa: E402
+from open_computer_use.desktop import BridgeError, Desktop, StaleWindow  # noqa: E402
 
 PASS, FAIL = "  ok  ", " FAIL "
 failures = []
@@ -35,7 +35,7 @@ def check(name, condition, detail=""):
 
 def main():
     foreground = "--foreground" in sys.argv
-    scratch = Path(tempfile.mkdtemp(prefix="jev-cu-")) / "bridge-check.txt"
+    scratch = Path(tempfile.mkdtemp(prefix="open-computer-use-")) / "bridge-check.txt"
     scratch.write_text("before\n")
     # -g opens the document without taking the screen from whoever has it.
     subprocess.run(["open", "-g", "-a", "TextEdit", str(scratch)], check=True)
