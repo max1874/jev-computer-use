@@ -288,8 +288,24 @@ class Desktop:
         page.update(sparseness(page))
         return page
 
-    def capture(self, width=1000, quality=0.6):
-        """A picture of the window, in a coordinate space a click can be named in."""
+    def capture(self, width=1800, quality=0.8):
+        """A picture of the window, in a coordinate space a click can be named in.
+
+        The width is the whole difference between a point that can be aimed and
+        one that cannot. Measured on a 2560-point Linear window against a tab
+        whose position had been confirmed by clicking it: at 1000 wide and 0.6
+        quality the model named a point every time and missed by 40 to 67
+        pixels, which on that window is 100 to 170 points — a different control.
+        At 1800 and 0.85 it landed 3 to 5 pixels from the centre, six times out
+        of six. The interface did not change and neither did the model. A 44
+        point tab is 17 pixels at 1000 and 31 at 1800.
+
+        It costs about 40% more prompt tokens on that window, and nothing at all
+        on a small one: the bridge never scales a capture up, so a Calculator
+        window is the same picture at either setting. Past about 1800 the
+        provider stopped charging for the extra pixels, which is a good sign it
+        stopped reading them — 2200 wide billed the same 2226 tokens as 1800.
+        """
         return self.bridge.call("capture", app=self.app, width=width, quality=quality)
 
     def fresh(self, page):

@@ -220,19 +220,44 @@ def head_properties(operations, targets):
             "enum": sorted(candidates),
             "description": f"{TARGET}\n\nThe operation assumed by this answer is {operation}.",
         }
+    # These four are speculative in the same way the target heads are: answer
+    # them as if their operation is the one that runs, whichever one you then
+    # choose. Saying "used only for CLICK_POINT" instead invited the answer
+    # null, and the shape makes that worse than it sounds — the keys are
+    # written in a fixed order with `operation` first now, but they used to be
+    # alphabetical, so a model emitted click_x before it had committed to an
+    # operation, wrote null because it had not chosen CLICK_POINT yet, and then
+    # chose CLICK_POINT. Every pixel decision came back with no point in it.
     if "TYPE_TEXT" in targets:
         properties["type_text_value"] = {
             "type": ["string", "null"],
-            "description": TEXT_VALUE + " Used only if the operation is TYPE_TEXT.",
+            "description": TEXT_VALUE + " Answer as if TYPE_TEXT is the operation that runs.",
         }
     if "CLICK_POINT" in operations:
-        properties["click_x"] = {"type": ["number", "null"], "description": "Screenshot x, used only for CLICK_POINT."}
-        properties["click_y"] = {"type": ["number", "null"], "description": "Screenshot y, used only for CLICK_POINT."}
+        point = "Answer as if CLICK_POINT is the operation that runs, whichever operation you choose."
+        properties["click_x"] = {
+            "type": ["number", "null"],
+            "description": f"Screenshot x of the point to click. {point}",
+        }
+        properties["click_y"] = {
+            "type": ["number", "null"],
+            "description": f"Screenshot y of the point to click. {point}",
+        }
         properties["keys_value"] = {
             "type": ["string", "null"],
-            "description": TEXT_VALUE + " Used only if the operation is TYPE_KEYS.",
+            "description": TEXT_VALUE + " Answer as if TYPE_KEYS is the operation that runs.",
         }
     return properties
+
+
+def head_order(properties):
+    """`operation` first, then the rest by name.
+
+    A model writes the object in the order it is given, and every other head is
+    conditioned on the operation. Asking for them alphabetically asked each one
+    to be answered before the thing it depends on had been decided.
+    """
+    return ["operation"] + sorted(name for name in properties if name != "operation")
 
 
 def schema_format(properties):
@@ -243,8 +268,8 @@ def schema_format(properties):
             "strict": True,
             "schema": {
                 "type": "object",
-                "properties": properties,
-                "required": sorted(properties),
+                "properties": {name: properties[name] for name in head_order(properties)},
+                "required": head_order(properties),
                 "additionalProperties": False,
             },
         },
@@ -257,13 +282,29 @@ def object_format_instructions(properties):
     Nothing downstream trusts this: an answer outside the offered choices is
     refused by `choose`, exactly as an invalid schema answer would be.
     """
-    lines = ["Reply with one JSON object and nothing else. Its keys, all required:"]
-    for name in sorted(properties):
+    lines = [
+        "Reply with one JSON object and nothing else. Write the keys in the order given,",
+        "all of them required. Every key after the first is answered as if its own operation",
+        "is the one that runs, whichever one you choose in the first:",
+    ]
+    for name in head_order(properties):
         spec = properties[name]
+        kinds = spec.get("type")
+        kinds = kinds if isinstance(kinds, list) else [kinds]
         if "enum" in spec:
             lines.append(f'- "{name}": exactly one of {json.dumps(spec["enum"], ensure_ascii=False)}')
-        elif spec.get("type") == "number":
-            lines.append(f'- "{name}": a number between 0 and 1')
+        elif "number" in kinds:
+            # A head typed number-or-null used to fall past this test and be
+            # described as a short string, which is what `click_x` and
+            # `click_y` are. The model was told to send text for a coordinate
+            # and `choose` then refused the text for not being a number, so on
+            # every provider that spells the shape out rather than enforcing it
+            # — which is the one the README recommends — the pixel path could
+            # choose CLICK_POINT and never once execute it.
+            # No mention of null here, even though the type permits it. This
+            # head is speculative, and the answer null is what "only used for"
+            # wording produced: never a point, on every request.
+            lines.append(f'- "{name}": a number')
         elif name == "type_text_value":
             lines.append(f'- "{name}": a string, or null when the operation is not TYPE_TEXT')
         else:
@@ -370,6 +411,20 @@ def user_content(state, capture):
             "image_url": {"url": f"data:{capture['media_type']};base64,{capture['image']}"},
         },
     ]
+
+
+def number(value):
+    """A finite number, whether it arrived as one or as a string of one."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value.strip())
+        except ValueError:
+            return None
+    if not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
 
 
 def jev_questions(operations, targets):
@@ -557,8 +612,12 @@ def choose(page, goal, history, capture=None):
     elif operation in controls:
         action = dict(controls[operation])
         if operation == "CLICK_POINT":
-            x, y = answer.get("click_x"), answer.get("click_y")
-            if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (x, y)):
+            # A number sent as "136" is a formatting habit, not a different
+            # answer, and the bounds check below is what actually decides
+            # whether the point is usable. Refusing the string only meant
+            # refusing the provider.
+            x, y = (number(answer.get(key)) for key in ("click_x", "click_y"))
+            if x is None or y is None:
                 raise ValueError("CLICK_POINT came back without a usable point; no operation executed.")
             width, height = capture["image_width"], capture["image_height"]
             if not (0 <= x <= width and 0 <= y <= height):

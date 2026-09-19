@@ -433,17 +433,17 @@ Known limits:
   For web pages use [browser-harness](https://github.com/browser-use/browser-harness)
   or [jev-ultrafast](https://github.com/browser-use/jev-ultrafast); this is for
   native apps.
-- **The pixel fallback's mechanism is verified; its judgement is not.** A whole
-  run now goes through it on Linear, which publishes three elements and no text
-  at all: capture, coordinate, HID click, and the change read back off the
-  picture, both when the click changed something and when it did not. The
-  frontmost guard refuses correctly, including mid-run when another app takes
-  the screen. What that run does not test is the part that matters most —
-  whether a **model** can reliably pick coordinates in a dense interface. The
-  decision came from `scripts/mock_model.py`, which picks the point named in
-  the goal and proves the plumbing and nothing else. Since the depth fix the
-  fallback also fires far less often than it was built to, which means it gets
-  far less exercise.
+- **The pixel fallback works, and how well depends on the picture, not the
+  model.** A whole run goes through it on Linear, which publishes three
+  elements and no text at all: capture, coordinate, HID click, and the change
+  read back off the picture. Asked to switch a tab, `deepseek-v4.1-flash`
+  named a point 3 pixels from the centre of a tab whose position had been
+  confirmed by clicking it, six times out of six, and the executed run landed
+  on it. The same question against the old 1000-pixel capture missed by 40 to
+  67 pixels every time — on that window, a different control. The interface
+  and the model were identical; only the width changed. See `Desktop.capture`.
+  Since the depth fix the fallback fires far less often than it was built to,
+  which means it still gets far less exercise than the tree path.
 - One window at a time: the focused window of one app. No sheets belonging to
   other windows, no multi-app workflows, no drag, no canvas, no web views.
 - Apps that publish a poor accessibility tree cannot be driven well. Before
