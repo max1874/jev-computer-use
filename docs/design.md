@@ -139,10 +139,21 @@ application.
 
 ## What is not solved
 
-Web content inside a browser is largely absent from the tree. Multi-window and
-multi-app workflows are out of scope. Drag, canvas and custom-drawn interfaces
-have no accessible representation to address, and there is no pixel fallback —
-an app with a poor accessibility tree simply cannot be driven well here.
+Multi-window and multi-app workflows are out of scope: one focused window of
+one app. Drag, text selection and custom-drawn canvases have no accessible
+representation to address and no operation here that reaches them.
+
+There is a pixel fallback, and this paragraph said there was not for as long as
+it existed. It is for a window whose tree is genuinely empty — capture, a point
+named in the picture, a real click — and it is strictly worse than everything
+else here: the point cannot be checked against anything before it lands, and
+the delivery requires the app in front. It is described in the README under
+"When the window says nothing".
+
+Web content is not the gap it was recorded as either. Chrome publishes a usable
+tree, forms in it read and write, and the earlier claim came from the same
+traversal limit that made Electron apps look empty. What a browser needs beyond
+that — tabs, navigation, more than one page — is what is missing.
 
 Menu items whose titles change with document state kept reporting their old
 title for seconds after the state changed, so state-dependent menu commands are

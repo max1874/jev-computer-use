@@ -109,7 +109,19 @@ func frontmostApp() -> NSRunningApplication? {
 
 // MARK: - Apps
 
-struct BridgeError: Error { let message: String }
+/// A failure, and whether the window was changed before it happened.
+///
+/// Most of these are pre-flight: a path that no longer resolves, an element
+/// that is disabled, a guard that refused. Nothing ran, and the caller can
+/// choose again freely. `TYPE_TEXT` is the exception — it empties the field
+/// before writing, so a read-back that does not match is a failure reported
+/// about a field that has already been changed. A caller told only "it failed"
+/// would leave that out of its record and choose again over a field it had
+/// itself emptied, so the distinction travels with the error.
+struct BridgeError: Error {
+    let message: String
+    var acted: Bool = false
+}
 
 func runningApp(_ query: String) throws -> NSRunningApplication {
     let lower = query.lowercased()
@@ -679,6 +691,21 @@ let keyboardLayout: [Character: (code: CGKeyCode, flags: CGEventFlags)] = {
     return map
 }()
 
+/// Type a string into whatever the target process has focused.
+///
+/// Characters the current keyboard layout can produce are sent as the real
+/// (keycode, modifier) pair that produces them, which is what an app reading
+/// `keyCode` rather than the character needs, and what makes a modifier appear
+/// held rather than merely implied. That covers the layout — for a US layout,
+/// the ASCII range — and it is verified against a Chromium composer.
+///
+/// It is not general text input. Anything the layout has no key for, which is
+/// every CJK character and every emoji, still goes as a Unicode string on a
+/// synthetic key, exactly as before: native fields take it, web content may
+/// not, and there is no third option for a character no key produces. The
+/// layout is read once and cached, so switching input source mid-session is
+/// not picked up either. "Background typing works for what the layout can
+/// produce" is the claim this supports; "typing is solved" is not.
 func typeText(_ text: String, pid: pid_t) {
     for character in text {
         if let key = keyboardLayout[character] {
@@ -952,7 +979,8 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
 
     if op == "MENU" {
         guard let path = request["menu"] as? String else { throw BridgeError(message: "MENU needs a menu path") }
-        return ["ok": true, "detail": try pressMenuPath(app, path), "mechanism": "AXPress(menu)"].merging(focusFacts(focusBefore, app)) { a, _ in a }.merging(focusFacts(focusBefore, app)) { a, _ in a }
+        return ["ok": true, "detail": try pressMenuPath(app, path), "mechanism": "AXPress(menu)"]
+            .merging(focusFacts(focusBefore, app)) { a, _ in a }
     }
     if op == "KEY" {
         guard let combo = request["key"] as? String else { throw BridgeError(message: "KEY needs a combo") }
@@ -963,10 +991,15 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         guard let x = request["x"] as? Double, let y = request["y"] as? Double,
             let scale = request["scale"] as? Double
         else { throw BridgeError(message: "CLICK_POINT needs x, y and the capture's scale") }
+        // This is the one operation that needs the app in front, so it is the
+        // one whose focus facts matter most, and it was the only one not
+        // reporting them. A run that summed `took_focus` over its steps could
+        // say False while every click in it went to a raised window.
         return try clickImagePoint(
             app, x: x, y: y, scale: scale,
             capturedWindow: (request["window_id"] as? Int).map { CGWindowID($0) },
             capturedSize: request["window_size"] as? [Double])
+            .merging(focusFacts(focusBefore, app)) { a, _ in a }
     }
     if op == "TYPE_KEYS" {
         // No element to set a value on; the keystrokes go wherever the app's
@@ -1066,11 +1099,13 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         // The keys go only to an element this process has just confirmed is the
         // one the app is focused on. A select-all and a delete aimed anywhere
         // else would destroy something nobody asked about.
+        var erased = false
         if focused == .success, focusedElement(pid).map({ CFEqual($0, element) }) == true {
             try pressKey("cmd+a", pid: pid)
             sleepMs(20)
             try pressKey("delete", pid: pid)
             sleepMs(40)
+            erased = true
         }
 
         var mechanism = "AXValue"
@@ -1114,8 +1149,11 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
                 "unverified": "this field exposes no readable value, so the write could not be confirmed",
             ].merging(focusFacts(focusBefore, app)) { a, _ in a }
         }
+        // The field was emptied on the way in, so this failure is about a
+        // field this call has already changed. `acted` says so; see BridgeError.
         throw BridgeError(
-            message: "the field did not take the value: wanted \"\(wanted)\", holds \"\(settled)\"")
+            message: "the field did not take the value: wanted \"\(wanted)\", holds \"\(settled)\"",
+            acted: erased || result == .success || mechanism == "CGEvent→pid")
     case "SELECT":
         guard let choice = request["option"] as? Int else { throw BridgeError(message: "SELECT needs an option") }
         var pool = children(element)
@@ -1214,7 +1252,7 @@ func handle(_ request: [String: Any]) -> [String: Any] {
             throw BridgeError(message: "unknown method \"\(method)\"")
         }
     } catch let error as BridgeError {
-        return ["id": id, "ok": false, "error": error.message]
+        return ["id": id, "ok": false, "error": error.message, "acted": error.acted]
     } catch {
         return ["id": id, "ok": false, "error": "\(error)"]
     }

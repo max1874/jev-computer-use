@@ -6,6 +6,7 @@ from .desktop import (
     PIXEL_CHANGE_THRESHOLD,
     BridgeError,
     Desktop,
+    Executed,
     StaleWindow,
     UnknownOutcome,
     thumbnail_difference,
@@ -75,7 +76,12 @@ class Agent:
             decisions=[],
             status="ready",
             verified=None,
-            took_focus=False,
+            # `activate=True` raises the app before the first observation, and
+            # that is the run taking the screen as surely as any step in it.
+            # Summing this over the steps alone reported False for a run that
+            # had already brought the window forward to begin with.
+            took_focus=bool(activate),
+            activated_at_start=bool(activate),
             elapsed_ms=0,
             started_at=None,
         )
@@ -230,10 +236,22 @@ class Agent:
                 try:
                     result = self.desktop.act(action, page, text=text)
                 except UnknownOutcome as error:
-                    # The operation was sent and its answer never came. It may
-                    # have run. Record the attempt, look at the window, and
-                    # stop: choosing again from here risks doing it twice, and
+                    # Two failures share this branch, and both mean the window
+                    # may not be what the decision was made against.
+                    #
+                    # The request was sent and its answer never came, so the
+                    # operation may have run; or the bridge answered that it
+                    # had already changed the window before it failed, which is
+                    # what a TYPE_TEXT read-back failure is — the field was
+                    # emptied on the way in. That second case used to arrive as
+                    # an ordinary refusal and leave the step out of the history
+                    # altogether, so the record said nothing had happened to a
+                    # field that had been cleared.
+                    #
+                    # Either way: record the attempt, look at the window, and
+                    # stop. Choosing again from here risks doing it twice, and
                     # some operations must not happen twice.
+                    certain = isinstance(error, Executed)
                     state["elapsed_ms"] = self._elapsed()
                     state["history"].append(
                         {
@@ -242,7 +260,7 @@ class Agent:
                             "target": decision["target"],
                             "label": action.get("label", operation) if action else operation,
                             "text": text,
-                            "outcome": "unknown",
+                            "outcome": "executed, unconfirmed" if certain else "unknown",
                             "detail": str(error),
                             "risk": decision["risk"],
                             "elapsed_ms": state["elapsed_ms"],
@@ -254,7 +272,10 @@ class Agent:
                         pass
                     state["status"] = "blocked"
                     state["note"] = (
-                        f"{operation} may or may not have run. Check the window before running anything else."
+                        f"{operation} changed the window and could not be confirmed. "
+                        f"Check the window before running anything else."
+                        if certain
+                        else f"{operation} may or may not have run. Check the window before running anything else."
                     )
                     return self.snapshot()
             self.pending_text = None

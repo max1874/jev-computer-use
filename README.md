@@ -283,12 +283,14 @@ So there is a second path, entered only when a window is sparse by measurement
 - The model **invents a coordinate** instead of selecting an index, so nothing
   can check the target before the click lands. This is the opposite of the idea
   the rest of the project is built on.
-- It **takes the screen**. A mouse event posted to a process is ignored by
-  ordinary controls — Calculator's keypad does not react to one even when the
-  app is frontmost — so a click that actually lands must go through the window
-  server, which has one cursor. The app must be in front, the pointer really
-  moves, and it is put back afterwards. `pixels` is therefore only available
-  with `activate=True`.
+- It **takes the screen, as implemented here**. The click is delivered through
+  the window server, which has one cursor, so this implementation requires the
+  app in front, really moves the pointer, and puts it back afterwards. That is
+  a property of how the click is sent, not something macOS has been shown to
+  require: keyboard events go to a process and reach a background window, and
+  whether a *mouse* event posted the same way can be made to land has not been
+  tested here. Until it is, `pixels` stays behind `activate=True`, and the
+  limitation is the delivery method rather than the platform.
 - It **sends your screen to the model.** The whole window, whatever is in it.
 - It **cannot be verified by the tree.** These windows' fingerprints barely
   move whatever happens inside them, so captures carry a 16×16 greyscale
@@ -429,10 +431,13 @@ Known limits:
   nobody is looking at can be reclaimed between runs. If the window disappears
   mid-run the operation that already executed stays on the record and the run
   stops as blocked, rather than vanishing with an exception.
-- Web content inside a browser is mostly absent from the accessibility tree.
-  For web pages use [browser-harness](https://github.com/browser-use/browser-harness)
-  or [jev-ultrafast](https://github.com/browser-use/jev-ultrafast); this is for
-  native apps.
+- Web content is reachable but this is not a browser tool. Chrome reports 76
+  elements and 3525 characters of text here, and forms in it read back fine, so
+  the old claim that browser content is mostly absent from the tree was wrong
+  in the same way the Electron one was. What is missing is everything a browser
+  needs beyond one window: tabs, navigation, multiple pages. For web work use
+  [browser-harness](https://github.com/browser-use/browser-harness) or
+  [jev-ultrafast](https://github.com/browser-use/jev-ultrafast).
 - **The pixel fallback works, and how well depends on the picture, not the
   model.** A whole run goes through it on Linear, which publishes three
   elements and no text at all: capture, coordinate, HID click, and the change

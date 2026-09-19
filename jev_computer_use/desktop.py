@@ -26,12 +26,25 @@ class BridgeError(RuntimeError):
 
 
 class UnknownOutcome(RuntimeError):
-    """The request was sent and no answer came back.
+    """The request was sent and the window may already have changed.
 
-    This is the one failure that must not be retried. The operation may have
-    run: a press that reached the app and then lost its reply looks exactly
-    like a press that never arrived. Observe the window and decide from what
-    is there, rather than sending it again.
+    These must not be retried. The operation may have run: a press that reached
+    the app and then lost its reply looks exactly like a press that never
+    arrived. Observe the window and decide from what is there, rather than
+    sending it again.
+    """
+
+
+class Executed(UnknownOutcome):
+    """The operation ran, changed the window, and could not be confirmed.
+
+    Not a variety of "nothing happened". `TYPE_TEXT` empties the field before
+    writing to it, so a read-back that does not match is a failure reported
+    about a field this call has already emptied. Treating that as a refusal
+    left the step out of the agent's history entirely and offered the model a
+    fresh choice over a field it had itself cleared, with no record that
+    anything had been done to it. A subclass, so every caller that already
+    knows not to retry an uncertain outcome covers this one too.
     """
 
 
@@ -99,8 +112,14 @@ class Bridge:
                 f"expected a reply to {request['id']} and got {answer.get('id')}; the bridge is out of step"
             )
         if not answer.get("ok"):
-            # The bridge refused before acting: these are all pre-flight checks.
-            raise BridgeError(answer.get("error", "unknown bridge error"))
+            message = answer.get("error", "unknown bridge error")
+            # Most bridge failures are pre-flight — a path that no longer
+            # resolves, a disabled element, a guard that refused — and nothing
+            # ran. The bridge says when that is not true, and it is not true
+            # for the one operation that clears a field before filling it.
+            if answer.get("acted"):
+                raise Executed(message)
+            raise BridgeError(message)
         return answer["result"]
 
     def close(self):
@@ -288,23 +307,28 @@ class Desktop:
         page.update(sparseness(page))
         return page
 
-    def capture(self, width=1800, quality=0.8):
+    def capture(self, width=1800, quality=0.6):
         """A picture of the window, in a coordinate space a click can be named in.
 
-        The width is the whole difference between a point that can be aimed and
-        one that cannot. Measured on a 2560-point Linear window against a tab
-        whose position had been confirmed by clicking it: at 1000 wide and 0.6
-        quality the model named a point every time and missed by 40 to 67
-        pixels, which on that window is 100 to 170 points — a different control.
-        At 1800 and 0.85 it landed 3 to 5 pixels from the centre, six times out
-        of six. The interface did not change and neither did the model. A 44
-        point tab is 17 pixels at 1000 and 31 at 1800.
+        Width and quality were varied separately, on one 2560-point Linear
+        window, against one tab whose position had been confirmed by clicking
+        it, with `deepseek-v4.1-flash` naming the point five times per cell:
 
-        It costs about 40% more prompt tokens on that window, and nothing at all
-        on a small one: the bridge never scales a capture up, so a Calculator
-        window is the same picture at either setting. Past about 1800 the
-        provider stopped charging for the extra pixels, which is a good sign it
-        stopped reading them — 2200 wide billed the same 2226 tokens as 1800.
+            1000 wide, quality 0.6   median 72px off, 0 of 5 within 15px
+            1000 wide, quality 0.85  median 72px off, 0 of 5 within 15px
+            1800 wide, quality 0.6   median  3px off, 5 of 5 within 15px
+            1800 wide, quality 0.85  median  3px off, 5 of 5 within 15px
+
+        So width is what mattered here and quality changed nothing, which is
+        why quality stays where it was and only the width moved. A 44 point tab
+        is 17 pixels across at 1000 and 31 at 1800. One window, one target, one
+        model: enough to set a default, not enough to call it a general rule.
+
+        The wider picture costs about 40% more prompt tokens on a window that
+        large — 1586 against 2225 — and nothing at all on a small one, because
+        the bridge never scales a capture up. 2200 wide billed the same 2226
+        tokens as 1800, which is a reason not to pay for more pixels here and
+        not evidence about what the model does or does not look at.
         """
         return self.bridge.call("capture", app=self.app, width=width, quality=quality)
 
