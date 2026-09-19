@@ -40,12 +40,3 @@ back, unlike `TYPE_TEXT`. Pointless while the operation is never offered.
 - **The pixel fallback gets little exercise.** Since the traversal-depth fix it
   fires far less often than it was built to, so it is the least-tested path in
   the project per line of code.
-
-## Housekeeping
-
-- `jev_computer_use/` is left over from the rename and holds only build output
-  — a compiled `bin/axbridge` and `__pycache__`. Safe to delete; `scripts/build.sh`
-  rebuilds into `open_computer_use/bin/`. (Tried to remove it and the sandbox
-  said no, so it needs a hand.)
-- The working copy still lives in a directory called `jev-computer-use`.
-  Cosmetic.
