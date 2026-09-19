@@ -10,7 +10,7 @@ every menu item as disabled. Without it nothing takes the screen from you.
 
 import argparse
 
-from jev_computer_use import Agent
+from open_computer_use import Agent
 
 
 def main():

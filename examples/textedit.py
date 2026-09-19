@@ -18,8 +18,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from jev_computer_use import Agent
-from jev_computer_use.desktop import Desktop
+from open_computer_use import Agent
+from open_computer_use.desktop import Desktop
 
 SENTENCE = "The quick brown fox jumps over the lazy dog."
 GOAL = f"Replace everything in the document with exactly this one sentence: '{SENTENCE}'"
@@ -30,7 +30,7 @@ def main():
     parser.add_argument("--keep-open", action="store_true", help="leave TextEdit running afterwards")
     options = parser.parse_args()
 
-    scratch = Path(tempfile.mkdtemp(prefix="jev-cu-")) / "demo.txt"
+    scratch = Path(tempfile.mkdtemp(prefix="open-computer-use-")) / "demo.txt"
     scratch.write_text("this line should be replaced\n")
     subprocess.run(["open", "-g", "-a", "TextEdit", str(scratch)], check=True)
     time.sleep(1.5)

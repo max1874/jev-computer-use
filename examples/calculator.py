@@ -16,8 +16,8 @@ import argparse
 import subprocess
 import time
 
-from jev_computer_use import Agent
-from jev_computer_use.desktop import Desktop
+from open_computer_use import Agent
+from open_computer_use.desktop import Desktop
 
 GOAL = "Compute 12 times 34 and leave the result on the display."
 EXPECTED = "408"

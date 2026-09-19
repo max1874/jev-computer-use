@@ -1,4 +1,4 @@
-# jev-computer-use
+# open-computer-use
 
 Read README.md and docs/design.md before editing. Keep the loop small:
 window → indexed elements → operation + target → guarded execution → observe.

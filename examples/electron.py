@@ -28,7 +28,7 @@ its numbers do not move and the deeper walk costs it nothing.
 import argparse
 import time
 
-from jev_computer_use.desktop import Bridge, sparseness
+from open_computer_use.desktop import Bridge, sparseness
 
 DEPTHS = [18, 26, 40, 60]
 
