@@ -46,8 +46,18 @@ accessibility tree → │ operation                    │
                               observe again
 ```
 
-Operations: `PRESS`, `TYPE_TEXT`, `SELECT`, `MENU`, `SCROLL_UP`, `SCROLL_DOWN`,
-`PRESS_RETURN`, `PRESS_ESCAPE`, `WAIT`, `DONE`, `BLOCKED`.
+Operations: `PRESS`, `TYPE_TEXT`, `SELECT`, `MENU`, `CLICK`, `SCROLL_UP`,
+`SCROLL_DOWN`, `PRESS_RETURN`, `PRESS_ESCAPE`, `WAIT`, `DONE`, `BLOCKED`.
+
+`CLICK` is the odd one. It is addressed to an element out of the same table as
+`PRESS`, and delivered with the pointer like the screenshot operations, so it
+needs the app in front and is offered only with `activate`. It exists because
+an element the app will not act on is still a place on the screen: a song in
+Music is an `AXStaticText` inside an anonymous cell inside an anonymous row,
+and not one of the three implements `AXPress`. Offering only what publishes an
+accessibility action read that window — 14,274 nodes, 3,791 of them named text
+— as 72 elements, none of which was a song. See "What a window is allowed to
+say".
 
 ### What is not offered
 
@@ -229,6 +239,43 @@ active.
 
 On this path, model output never becomes a path, a selector, a shell command or
 executable code. It selects an index from a table the executor built.
+
+## What a window is allowed to say
+
+The second time this project mistook its own reader for the app.
+
+The first is the section below: Electron windows looked empty because the walk
+stopped above the web content. This one is Music. Its window publishes 14,274
+accessibility nodes — 955 rows, 6,595 cells, 3,791 named static texts carrying
+every song title, artist, album and duration, and every entry in the sidebar.
+This reader offered **72 elements**, and not one of them was a song.
+
+The filter was one line: an element with no accessibility action is context,
+not a choice. It sounds conservative. What it means in a list-shaped app is
+that the contents of the window are unreachable, because a song in Music is an
+`AXStaticText` inside an anonymous `AXCell` inside an anonymous `AXRow` and
+none of the three implements `AXPress`. What survived the filter was 67 hover
+buttons — ten identical triples of 喜爱 / 播放 / 更多, carrying no identity at
+all — so a run that needed a particular song had a table with plenty in it and
+nothing to aim at. The sparseness test called that window rich, which it was,
+and not addressable, which it could not see.
+
+So elements that carry content are now offered too, with `CLICK`, which aims
+at the middle of the element's own rectangle. Three things keep it honest:
+
+- **It is last.** Any element that answers to the accessibility API is reached
+  that way; `CLICK` appears only where nothing else can.
+- **It costs the screen.** Delivery is a real pointer event, so the app must be
+  in front, which makes it `activate`-only — the same permission as the
+  screenshot operations, and for the same reason. Without `activate`, Music
+  reads as 71 tree-only elements and nothing takes the screen.
+- **Content and controls have separate budgets.** A shared limit is spent by
+  four thousand song titles before the walk reaches the toolbar, and the table
+  then looks full while the app's actual controls have fallen off the end.
+
+A static text's name is its value, which is its own small correction: every
+other role answers to a title, a description or a label element, and reading
+this one the same way returned an entire window's contents as anonymous.
 
 ## When the window says nothing
 

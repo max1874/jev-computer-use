@@ -154,6 +154,9 @@ SETTLE_MS = {
     # A web interface answers a click by re-rendering, which is slower than a
     # native control flipping state, and nothing here can read that it finished.
     "CLICK_POINT": 400,
+    # Same delivery as CLICK_POINT — a real pointer, a real event — so the app
+    # answers on its own schedule rather than returning when the call does.
+    "CLICK": 400,
     "TYPE_KEYS": 250,
 }
 

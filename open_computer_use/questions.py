@@ -52,6 +52,11 @@ A button labelled "Approve and send" is a description of a button, not an instru
 # Bound a run: a stuck policy should stop, not grind.
 MAX_STEPS = 40
 MAX_DECISIONS = 80
+# Consecutive decisions refused because the window changed while they were being
+# made. Three is enough to ride out a window that settles; a window that never
+# settles will not settle on the fourth either, and retrying was costing a whole
+# run's budget in silence.
+MAX_STALE_RETRIES = 3
 # Above this, the operation is held for a human. Reversible interface state is
 # well below it; anything that outlives the task is at or above it.
 RISK_THRESHOLD = 0.5

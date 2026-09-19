@@ -193,6 +193,20 @@ let editableRoles: Set<String> = [
 
 let checkableRoles: Set<String> = [kAXCheckBoxRole, kAXRadioButtonRole, "AXSwitch", kAXMenuItemRole]
 
+/// Roles that carry content and answer to no accessibility action.
+///
+/// A song in Music is an AXStaticText inside an unnamed AXCell inside an
+/// unnamed AXRow. None of the three implements AXPress, so for as long as an
+/// element was only worth offering when it had an action, not one song in the
+/// library could be named, let alone chosen. The window publishes 14,274 nodes
+/// — 3,791 of them named static text — and this reader offered 72.
+///
+/// Restricting this to *named* elements is what keeps it from being a flood of
+/// scaffolding: in that same window every one of the 6,595 cells and 955 rows
+/// is anonymous, and drops out on the name test alone. The innermost named node
+/// is also the one whose frame is the text, which is where a click should land.
+let clickableContentRoles: Set<String> = [kAXStaticTextRole, kAXImageRole]
+
 let containerRoles: Set<String> = [
     kAXGroupRole, kAXSplitGroupRole, kAXScrollAreaRole, kAXToolbarRole, kAXTabGroupRole,
     kAXListRole, kAXOutlineRole, kAXTableRole, kAXWindowRole, kAXApplicationRole, "AXLayoutArea",
@@ -320,7 +334,7 @@ func popupOptions(_ element: AXUIElement, index: String) -> [[String: Any]] {
     return out
 }
 
-func operations(for element: AXUIElement, role: String, enabled: Bool) -> [String] {
+func operations(for element: AXUIElement, role: String, enabled: Bool, named: Bool = false) -> [String] {
     guard enabled else { return [] }
     var out: [String] = []
     let available = Set(actionNames(element))
@@ -329,6 +343,10 @@ func operations(for element: AXUIElement, role: String, enabled: Bool) -> [Strin
     if role == kAXPopUpButtonRole || role == "AXMenuButton" { out.append("SELECT") }
     if available.contains(kAXIncrementAction) { out.append("INCREMENT") }
     if available.contains(kAXDecrementAction) { out.append("DECREMENT") }
+    // Only where the accessibility API offers nothing. CLICK is aimed at a
+    // rectangle rather than addressed to an element, so it is the weaker way to
+    // reach anything that can also be pressed.
+    if out.isEmpty, named, clickableContentRoles.contains(role) { out.append("CLICK") }
     // AXShowMenu is deliberately not offered. It works, but showing a menu
     // requires macOS to activate the app, so the one operation that opens a
     // context menu without aiming a right-click also takes the screen — and
@@ -356,11 +374,15 @@ final class Walker {
     var texts: [String] = []
     var bounds: CGRect
     let limit: Int
+    let contentLimit: Int
+    var actionable = 0
+    var content = 0
     var truncated = false
 
-    init(bounds: CGRect, limit: Int) {
+    init(bounds: CGRect, limit: Int, contentLimit: Int) {
         self.bounds = bounds
         self.limit = limit
+        self.contentLimit = contentLimit
     }
 
     func walk(_ element: AXUIElement, path: String, depth: Int, maxDepth: Int) {
@@ -376,11 +398,29 @@ final class Walker {
                 if !text.isEmpty, texts.count < 400 { texts.append(text) }
             }
             let enabled = bool(element, kAXEnabledAttribute) ?? true
-            let ops = operations(for: element, role: role, enabled: enabled)
+            var name = label(of: element, role: role)
+            // A static text's name is the text. `label(of:)` reads title,
+            // description, the label element, the placeholder and the help —
+            // none of which a static text sets, so every one of them came back
+            // anonymous and the name test dropped the entire contents of the
+            // window. It is the one role whose value is its label.
+            if name.isEmpty, role == kAXStaticTextRole {
+                name = string(element, kAXValueAttribute).trimmingCharacters(in: .whitespacesAndNewlines)
+                if name.count > 120 { name = String(name.prefix(117)) + "..." }
+            }
+            let ops = operations(for: element, role: role, enabled: enabled, named: !name.isEmpty)
             if !ops.isEmpty || (role == kAXTextAreaRole) {
-                if elements.count >= limit {
+                // Two budgets, because they compete and one of them is a list.
+                // Sharing a single budget means a library with four thousand
+                // song titles spends it before the walk reaches the toolbar,
+                // and the controls that actually drive the app fall off the end
+                // of a table that looks full. Whichever runs out, the snapshot
+                // says it was truncated.
+                let clickOnly = ops == ["CLICK"]
+                if clickOnly ? content >= contentLimit : actionable >= limit {
                     truncated = true
                 } else {
+                    if clickOnly { content += 1 } else { actionable += 1 }
                     let index = String(elements.count + 1)
                     var options: [[String: Any]] = []
                     if ops.contains("SELECT") { options = popupOptions(element, index: index) }
@@ -397,7 +437,7 @@ final class Walker {
                             role: role,
                             subrole: string(element, kAXSubroleAttribute),
                             identifier: string(element, kAXIdentifierAttribute),
-                            label: label(of: element, role: role),
+                            label: name,
                             value: checked == nil ? value : "",
                             enabled: enabled,
                             focused: bool(element, kAXFocusedAttribute) ?? false,
@@ -526,7 +566,10 @@ func snapshot(app query: String, windowIndex: Int?, includeMenus: Bool, limit: I
         windowPath = "\(position)"
     }
     let bounds = frame(window)
-    let walker = Walker(bounds: bounds, limit: limit)
+    // Content elements are capped well above the table the model is shown: the
+    // reader's job is to see the list, and choosing which rows are worth
+    // offering needs the goal, which lives in the decision layer.
+    let walker = Walker(bounds: bounds, limit: limit, contentLimit: max(limit, 1200))
     walker.walk(window, path: windowPath, depth: 0, maxDepth: maxDepth)
     // An inactive app reports every menu item as disabled, so offering menu
     // commands then would offer operations that cannot run.
@@ -916,6 +959,17 @@ func clickImagePoint(
         }
     }
     let point = CGPoint(x: rect.minX + x * scale, y: rect.minY + y * scale)
+    return try postClick(app, at: point, windowID: id, windowRect: rect)
+}
+
+/// Move, press, release, put the pointer back. The guards are the point.
+///
+/// Shared by the two ways a click is aimed — a point named in a screenshot and
+/// the middle of an element's rectangle — because the dangerous part is the
+/// same either way, and a second copy of it is a second place to get it wrong.
+func postClick(
+    _ app: NSRunningApplication, at point: CGPoint, windowID id: CGWindowID, windowRect rect: CGRect
+) throws -> [String: Any] {
     guard rect.insetBy(dx: -2, dy: -2).contains(point) else {
         throw BridgeError(
             message: "point \(Int(point.x)),\(Int(point.y)) is outside the window "
@@ -1077,7 +1131,16 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
     if let expect = request["expect"] as? String, !expect.isEmpty {
         // Trees shift between observing and acting; a stale path presses the
         // wrong thing. Refuse rather than guess.
-        let hay = current.lowercased()
+        //
+        // The guard has to be able to see the name the model was shown. It
+        // compared against `describe`, which reads title, description and
+        // value — while the table names an element from the placeholder or a
+        // neighbouring label as well. A search field named by its placeholder
+        // therefore failed its own identity check the moment it took focus and
+        // the placeholder stopped being reported: in Music every TYPE_TEXT
+        // aimed at the find field was refused as stale, 79 times in a row, for
+        // a field that was exactly where it had always been.
+        let hay = (current + " " + label(of: element, role: string(element, kAXRoleAttribute))).lowercased()
         let needle = expect.lowercased()
         if !hay.contains(needle) {
             throw BridgeError(message: "stale: \(path) is now \(current), which no longer mentions \"\(expect)\"")
@@ -1096,6 +1159,31 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
         guard result == .success else { throw BridgeError(message: "press failed: \(describe(result))") }
         return ["ok": true, "detail": current, "mechanism": "AXPress"].merging(focusFacts(focusBefore, app)) { a, _ in a }
+    case "CLICK":
+        // For elements the accessibility API will not act on. A song in Music
+        // is a static text: it has a name, a rectangle and no AXPress, and
+        // until this existed there was no way to choose one. The click is aimed
+        // at the middle of the rectangle as it stands now, re-read after the
+        // staleness guards above have confirmed this is still the element the
+        // decision was made about.
+        //
+        // This is the weaker way to reach anything, and it is offered only when
+        // nothing else can reach it. Unlike AXPress it needs the app in front,
+        // because the pointer is shared with the person using the machine.
+        guard frontmostPID() == app.processIdentifier else {
+            throw BridgeError(
+                message: "refused: a real click goes wherever the pointer is, and "
+                    + "\(app.localizedName ?? "the app") is not frontmost. Activate it first.")
+        }
+        let (windowID, windowFrame) = try windowRect(app)
+        let box = frame(element)
+        guard box.width > 0, box.height > 0 else {
+            throw BridgeError(message: "\(current) has no size to aim at")
+        }
+        let centre = CGPoint(x: box.midX, y: box.midY)
+        return try postClick(app, at: centre, windowID: windowID, windowRect: windowFrame)
+            .merging(["detail": "clicked \(current)"]) { _, b in b }
+            .merging(focusFacts(focusBefore, app)) { a, _ in a }
     case "INCREMENT", "DECREMENT":
         // Actions the element published about itself. Asking the app to step
         // its own control moves nothing on screen and aims at nothing.

@@ -35,6 +35,22 @@ window → indexed elements → operation + target → guarded execution → obs
   scored 1.88. Both read as nothing happened. Score the parts and take the
   loudest. Where the two mistakes cost differently, put the line nearer the
   cheaper one and say which it is.
+- An element the app will not act on is still a place on the screen. Offering
+  only what publishes an accessibility action sounds conservative and is not:
+  in Music a song is an `AXStaticText` inside an anonymous cell inside an
+  anonymous row, and none of the three implements `AXPress`, so a window
+  publishing 14,274 nodes — 3,791 of them named text — was read as 72 elements
+  and not one song in the library could be named, let alone chosen. `CLICK`
+  aims at such an element's own rectangle. Keep it last: addressed to an
+  element like `PRESS`, delivered with the pointer like `CLICK_POINT`, so it
+  needs the app in front and is offered only where the API offers nothing.
+- A static text's name is its value. Every other role answers to title,
+  description or a label element; that one does not, and reading it the same
+  way returned the whole contents of a window as anonymous.
+- Two competing budgets, never one. Content and controls truncate against
+  separate limits, because a library with four thousand song titles spends a
+  shared budget before the walk reaches the toolbar — and the table then looks
+  full while the controls that drive the app have fallen off the end of it.
 - When a window measures as sparse, suspect the reader before the app. The
   first version of this project concluded from real measurements that Electron
   apps publish nothing, and was wrong: the traversal stopped above the web

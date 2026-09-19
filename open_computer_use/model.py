@@ -31,6 +31,10 @@ TARGETED = {
     "TYPE_TEXT": "Enter or replace the whole contents of an editable field.",
     "SELECT": "Choose a value from a pop-up button's menu.",
     "MENU": "Run a menu-bar command by name, without opening the menu first.",
+    "CLICK": (
+        "Click an element the app will not act on directly — a row of a list, a song title, "
+        "a sidebar entry. Use it when the thing you want is in the table but offers no PRESS."
+    ),
     # INCREMENT and DECREMENT are deliberately absent. The bridge derives and
     # executes both, and adding them here is one line — it was added, measured,
     # and taken out again. Calculator publishes them on "Show Sidebar" and
@@ -64,8 +68,23 @@ def post_json(url, key, body):
     for attempt in range(3):
         try:
             response = CLIENT.post(url, json=body, headers={"Authorization": f"Bearer {key}"})
-        except httpx.HTTPError:
-            raise RuntimeError("Model connection failed; no operation executed.") from None
+        except httpx.HTTPError as error:
+            # A decision request changes nothing, so a connection that dropped
+            # on the way out is safe to send again — and this one only retried
+            # HTTP status codes, so a single TLS EOF from the provider ended
+            # the run outright. Retried on the same schedule as a 503.
+            if attempt < 2:
+                time.sleep(0.4 * 2**attempt)
+                continue
+            # Name the failure. "Model connection failed" reads the same for a
+            # timeout, a refused connection and DNS, which are three different
+            # things to do next, and it hid all three behind `from None`. The
+            # URL's host is safe to say; the key is in a header and never in
+            # this message.
+            host = httpx.URL(url).host
+            raise RuntimeError(
+                f"Could not reach {host}: {type(error).__name__}: {error}. No operation executed."
+            ) from error
         if response.status_code in {408, 429, 500, 502, 503, 529} and attempt < 2:
             time.sleep(0.4 * 2**attempt)
             continue
@@ -115,7 +134,13 @@ def scaffolding(candidates):
     return drop
 
 
-def action_space(page, pixels=False, refused=()):
+# CLICK is addressed to an element, like PRESS, but delivered with the pointer,
+# like CLICK_POINT: the app has to be in front. So it sits on the `pointer`
+# permission rather than being offered whenever the element exists.
+POINTER_OPERATIONS = {"CLICK"}
+
+
+def action_space(page, pixels=False, refused=(), pointer=False):
     """One index per element; each operation carries only the targets it can use.
 
     Returns the table shown to the model, the per-operation target maps, and the
@@ -135,7 +160,8 @@ def action_space(page, pixels=False, refused=()):
         source
         for source in page["elements"]
         # An element with no usable operation is context, not a choice.
-        if [op for op in source["operations"] if op in TARGETED] or source["role"] == "AXTextArea"
+        if [op for op in source["operations"] if op in TARGETED and (pointer or op not in POINTER_OPERATIONS)]
+        or source["role"] == "AXTextArea"
     ]
     wrappers = scaffolding(usable)
 
@@ -144,7 +170,11 @@ def action_space(page, pixels=False, refused=()):
         if source["path"] in wrappers:
             continue
         operations = [
-            op for op in source["operations"] if op in TARGETED and (op, source["path"]) not in refused
+            op
+            for op in source["operations"]
+            if op in TARGETED
+            and (op, source["path"]) not in refused
+            and (pointer or op not in POINTER_OPERATIONS)
         ]
         # Every operation on it has just been refused, so it is not a choice.
         if not operations and source["role"] != "AXTextArea":
@@ -592,7 +622,9 @@ def choose(page, goal, history, capture=None, pointer=False, refused=()):
     since it last changed. They are dropped from the table rather than argued
     about in the prompt.
     """
-    elements, targets, controls = action_space(page, pixels=bool(capture) and pointer, refused=refused)
+    elements, targets, controls = action_space(
+        page, pixels=bool(capture) and pointer, refused=refused, pointer=pointer
+    )
     operations = questions_for(targets, controls)
     state = {
         "goal": goal,
@@ -741,11 +773,28 @@ def field_text(context):
             ],
         },
     )
+    # One message per reason. "No valid field value" covered a refusal, a
+    # malformed answer and an answer that was simply too long, and the operator
+    # reading the traceback could not tell which had happened — nor whether
+    # asking again would help.
     try:
-        output = json.loads(payload["choices"][0]["message"]["content"])
-        value = output["text"]
-        if set(output) != {"text"} or not isinstance(value, str) or not value.strip() or len(value) > 2000:
-            raise ValueError()
-    except (ValueError, KeyError, TypeError, IndexError):
-        raise ValueError("The text model returned no valid field value; nothing was typed.") from None
+        content = payload["choices"][0]["message"]["content"]
+    except (KeyError, TypeError, IndexError):
+        raise ValueError("The text model returned no message; nothing was typed.") from None
+    try:
+        output = json.loads(content)
+    except ValueError:
+        raise ValueError(f"The text model did not answer with JSON: {content[:120]!r}; nothing was typed.") from None
+    if not isinstance(output, dict) or "text" not in output:
+        raise ValueError(f"The text model answered {content[:120]!r}, which has no text; nothing was typed.")
+    value = output["text"]
+    if value is None:
+        raise ValueError("The text model declined to supply a value for this field; nothing was typed.")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"The text model supplied {value!r}, which is not a value; nothing was typed.")
+    if len(value) > 2000:
+        raise ValueError(f"The text model supplied {len(value)} characters, over the 2000 limit; nothing was typed.")
+    if set(output) != {"text"}:
+        extra = ", ".join(sorted(set(output) - {"text"}))
+        raise ValueError(f"The text model added {extra} alongside the value; nothing was typed.")
     return value, {"model": model, "latency_ms": round((time.perf_counter() - started) * 1000)}

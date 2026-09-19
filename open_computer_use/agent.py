@@ -12,7 +12,39 @@ from .desktop import (
     thumbnail_difference,
 )
 from .model import action_space, choose, field_context, field_text
-from .questions import MAX_DECISIONS, MAX_STEPS, RISK_THRESHOLD
+from .questions import MAX_DECISIONS, MAX_STALE_RETRIES, MAX_STEPS, RISK_THRESHOLD
+
+
+def window_changes(before, after, limit=3):
+    """Name what moved between two observations, for a run that keeps going stale.
+
+    The freshness guard answers yes or no, which is all it needs to refuse an
+    operation and nothing like enough to explain a run that was refused eighty
+    times. A window with a clock in it is never fresh, and "the window changed"
+    does not say that a clock is what changed.
+    """
+    def by_path(page):
+        return {e["path"]: e for e in page.get("elements", [])}
+
+    old, new = by_path(before), by_path(after)
+    moved = []
+    for path, element in new.items():
+        was = old.get(path)
+        if was is None:
+            moved.append(f"{element['role'].removeprefix('AX')} \"{element.get('label') or '?'}\" appeared")
+        elif was.get("value") != element.get("value"):
+            moved.append(
+                f"{element.get('label') or element['role'].removeprefix('AX')}: "
+                f"{was.get('value')!r} → {element.get('value')!r}"
+            )
+        elif was.get("label") != element.get("label"):
+            moved.append(f"{was.get('label')!r} → {element.get('label')!r}")
+        if len(moved) >= limit:
+            break
+    gone = len(set(old) - set(new))
+    if gone and len(moved) < limit:
+        moved.append(f"{gone} elements went away")
+    return "; ".join(moved)
 
 
 class Agent:
@@ -55,6 +87,8 @@ class Agent:
         # now stands. Cleared the moment the window changes, because a
         # refusal is a fact about a state, not about a control.
         self.refused = set()
+        # Consecutive decisions refused because the window moved under them.
+        self.stale = 0
         # Screenshots are a fallback for windows that publish nothing, not a
         # default input. Set pixels=False to keep the run tree-only.
         #
@@ -70,7 +104,12 @@ class Agent:
         # background run saw an empty table, had no picture, and said BLOCKED
         # without ever having been shown the thing it was failing to describe.
         self.pixels = pixels
-        self.pointer = pixels and activate
+        # Permission to aim the pointer, which is what `activate` buys and all
+        # that it buys. It is no longer tied to `pixels`, because a click aimed
+        # at an element's own rectangle is not a pixel operation: CLICK comes
+        # out of the table like PRESS does, and only its delivery needs the app
+        # in front. The pixel operations still need a capture on top of this.
+        self.pointer = bool(activate)
         self.activate = activate
         self.capture = None
         self.desktop = Desktop(app, menus=menus, activate=activate)
@@ -120,14 +159,48 @@ class Agent:
         if name == "tick":
             try:
                 self.command("predict")
-                if state["status"] == "needs_approval":
+                # Anything but a decision to execute ends the tick. Only
+                # `needs_approval` was checked, so a run that exhausted its
+                # decision budget went on to act on the decision it did not
+                # have, and ended in "Observe and choose before acting" —
+                # a sentence about the caller's sequencing, thrown at a caller
+                # whose sequencing was fine.
+                if state["status"] in {"needs_approval", "blocked", "done"}:
                     return self.snapshot()
                 return self.command("act", {"fingerprint": state["page"]["fingerprint"]})
-            except StaleWindow:
+            except StaleWindow as error:
                 # The window moved on between deciding and acting. Nothing ran.
+                #
+                # Bounded, because this retry used to be free and invisible. A
+                # window with anything live in it — a playing track, a clock —
+                # changes during the second the decision takes, so every
+                # TYPE_TEXT was refused before it started: 79 decisions, 79
+                # retries, no history, and a run that ended on its decision
+                # budget with one step to show for it. Retrying forever is not
+                # patience when nothing is converging.
+                previous = state["page"]
                 state["decision"] = None
-                state["status"] = "ready"
                 state["page"] = self.desktop.observe()
+                self.stale += 1
+                state["elapsed_ms"] = self._elapsed()
+                if self.stale >= MAX_STALE_RETRIES:
+                    state["status"] = "blocked"
+                    moved = window_changes(previous, state["page"])
+                    state["note"] = (
+                        f"{self.stale} decisions in a row were refused as stale: {error} "
+                        + (f"What keeps changing: {moved}." if moved else "Nothing visible changed between them.")
+                    )
+                else:
+                    state["status"] = "ready"
+                return self.snapshot()
+            except RuntimeError as error:
+                # The decision could not be obtained — the provider is down, out
+                # of quota, or unreachable after its retries. Nothing executed,
+                # and the run has an answer: it stopped, and why. A traceback
+                # here threw away every step that had already succeeded.
+                state["decision"] = None
+                state["status"] = "blocked"
+                state["note"] = str(error)
                 state["elapsed_ms"] = self._elapsed()
                 return self.snapshot()
 
@@ -248,22 +321,55 @@ class Agent:
 
             action = decision["action"]
             text, helper = None, None
-            if operation == "TYPE_KEYS":
-                text = decision.get("text")
-                if not text:
-                    raise ValueError("TYPE_KEYS came back without text; nothing was typed.")
-            elif operation == "TYPE_TEXT":
-                if not self.desktop.fresh(page):
-                    raise StaleWindow("The window changed before the value was settled. Choose again.")
-                text = decision.get("text")
-                if not text:
-                    # A choice-only decision backend cannot write; ask a text model.
-                    context = field_context(state["goal"], action, page, state["history"])
-                    if self.pending_text and self.pending_text[0] == context:
-                        _, text, helper = self.pending_text
-                    else:
-                        text, helper = field_text(context)
-                        self.pending_text = (context, text, helper)
+            # Failing to produce a value is a failure of the step, not of the
+            # run. It happens before anything is executed — the field is
+            # untouched — so it records like a refusal and the loop carries on.
+            # Raising here killed a run on its second step and took the first
+            # step's record with it, which is the same defect the bridge's
+            # refusals had: an executor is not allowed to lose its history
+            # because one operation could not be prepared.
+            try:
+                if operation == "TYPE_KEYS":
+                    text = decision.get("text")
+                    if not text:
+                        raise ValueError("TYPE_KEYS came back without text; nothing was typed.")
+                elif operation == "TYPE_TEXT":
+                    if not self.desktop.fresh(page):
+                        raise StaleWindow("The window changed before the value was settled. Choose again.")
+                    text = decision.get("text")
+                    if not text:
+                        # A choice-only decision backend cannot write; ask a text model.
+                        context = field_context(state["goal"], action, page, state["history"])
+                        if self.pending_text and self.pending_text[0] == context:
+                            _, text, helper = self.pending_text
+                        else:
+                            text, helper = field_text(context)
+                            self.pending_text = (context, text, helper)
+            except ValueError as error:
+                state["elapsed_ms"] = self._elapsed()
+                state["history"].append(
+                    {
+                        "step": len(state["history"]) + 1,
+                        "operation": operation,
+                        "target": decision["target"],
+                        "label": action.get("label", operation) if action else operation,
+                        "text": None,
+                        "outcome": "not attempted",
+                        "detail": str(error),
+                        "path": action.get("path") if action else None,
+                        "risk": decision["risk"],
+                        "window_changed": False,
+                        "elapsed_ms": state["elapsed_ms"],
+                    }
+                )
+                if action and action.get("path"):
+                    self.refused.add((operation, action["path"]))
+                recent = state["history"][-3:]
+                stuck = len(recent) == 3 and all(h.get("window_changed") is False for h in recent)
+                state["status"] = "blocked" if stuck else "ready"
+                if stuck:
+                    state["note"] = str(error)
+                return self.snapshot()
 
             if operation == "WAIT":
                 time.sleep(0.15)
@@ -368,6 +474,8 @@ class Agent:
                         state["note"] = f"{operation} was refused: {error}"
                     return self.snapshot()
             self.pending_text = None
+            # Something executed, so the run is converging again.
+            self.stale = 0
             state["elapsed_ms"] = self._elapsed()
 
             # Record execution before observing its result: a stale observation
