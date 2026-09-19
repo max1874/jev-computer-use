@@ -549,6 +549,20 @@ def ask_chat(state, operations, targets, capture):
     }
 
 
+def past_action(step):
+    """One history row as the model sees it.
+
+    `outcome` is carried only when the step has one, which is only when it did
+    not run cleanly. Without it a refused operation and one that ran and moved
+    nothing are the same row — `window_changed: false` — and the obvious read of
+    that row is to try the same control again.
+    """
+    row = {k: step.get(k) for k in ("operation", "label", "text", "window_changed")}
+    if step.get("outcome"):
+        row["outcome"] = step["outcome"]
+    return row
+
+
 def choose(page, goal, history, capture=None, pointer=False):
     """One request: the operation, a target for every operation, and a risk rating.
 
@@ -567,9 +581,11 @@ def choose(page, goal, history, capture=None, pointer=False):
         "window": {"app": page["app"], "title": page["window"], "visible_text": page["text"]},
         "elements": elements,
         "menu_commands": [{"index": i["index"], "command": i["label"]} for i in page.get("menus", [])],
-        "recent_actions": [
-            {k: h.get(k) for k in ("operation", "label", "text", "window_changed")} for h in history[-10:]
-        ],
+        # `outcome` only rides along when there is one, which is when the step
+        # did not run cleanly. Without it a refusal and a press that landed on
+        # something inert are the same row — `window_changed: false` — and the
+        # obvious next move from that row is to press the same thing again.
+        "recent_actions": [past_action(h) for h in history[-10:]],
         "offered_operations": operations,
     }
     # Only when it happened. The bridge has always reported this and nothing

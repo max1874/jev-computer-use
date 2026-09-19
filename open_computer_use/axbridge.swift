@@ -581,6 +581,31 @@ func snapshotJSON(_ snap: Snapshot) -> [String: Any] {
 
 func sleepMs(_ ms: Int) { usleep(useconds_t(ms * 1000)) }
 
+/// The name of an AXError, because the number is not a diagnosis.
+///
+/// `AXError -25200` reached the operator, the history and the model's next
+/// decision as a bare integer. The names are not much, but the difference
+/// between "this element does not implement this action" and "the app would
+/// not do it just now" is the difference between choosing something else and
+/// trying the same thing again.
+func describe(_ error: AXError) -> String {
+    let names: [AXError: String] = [
+        .failure: "the app refused it",
+        .illegalArgument: "illegal argument",
+        .invalidUIElement: "the element is gone",
+        .invalidUIElementObserver: "invalid observer",
+        .cannotComplete: "the app did not answer",
+        .attributeUnsupported: "attribute unsupported",
+        .actionUnsupported: "this element does not offer this action",
+        .notificationUnsupported: "notification unsupported",
+        .notImplemented: "not implemented by the app",
+        .notEnoughPrecision: "not enough precision",
+        .apiDisabled: "accessibility is not permitted for this process",
+        .noValue: "no value",
+    ]
+    return "\(names[error] ?? "AXError") (\(error.rawValue))"
+}
+
 func scroll(_ element: AXUIElement, pid: pid_t, amount: Int) throws {
     let rect = frame(element)
     guard rect.width > 0, rect.height > 0 else { throw BridgeError(message: "nothing scrollable is visible") }
@@ -955,7 +980,7 @@ func pressMenuPath(_ app: NSRunningApplication, _ path: String) throws -> String
         throw BridgeError(message: "menu item \(path) is disabled")
     }
     let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
-    guard result == .success else { throw BridgeError(message: "menu press failed: AXError \(result.rawValue)") }
+    guard result == .success else { throw BridgeError(message: "menu press failed: \(describe(result))") }
     return describe(element)
 }
 
@@ -1069,14 +1094,14 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
             throw BridgeError(message: "\(current) offers no AXPress; it has \(available)")
         }
         let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
-        guard result == .success else { throw BridgeError(message: "press failed: AXError \(result.rawValue)") }
+        guard result == .success else { throw BridgeError(message: "press failed: \(describe(result))") }
         return ["ok": true, "detail": current, "mechanism": "AXPress"].merging(focusFacts(focusBefore, app)) { a, _ in a }
     case "INCREMENT", "DECREMENT":
         // Actions the element published about itself. Asking the app to step
         // its own control moves nothing on screen and aims at nothing.
         let action = op == "INCREMENT" ? kAXIncrementAction : kAXDecrementAction
         let result = AXUIElementPerformAction(element, action as CFString)
-        guard result == .success else { throw BridgeError(message: "\(op) failed: AXError \(result.rawValue)") }
+        guard result == .success else { throw BridgeError(message: "\(op) failed: \(describe(result))") }
         return ["ok": true, "detail": current, "mechanism": action].merging(focusFacts(focusBefore, app)) { a, _ in a }
     case "TYPE_TEXT":
         guard let text = request["text"] as? String else { throw BridgeError(message: "TYPE_TEXT needs text") }
@@ -1123,8 +1148,8 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         if result != .success {
             guard focused == .success else {
                 throw BridgeError(
-                    message: "the field refused both the value (AXError \(result.rawValue)) and focus "
-                        + "(AXError \(focused.rawValue)); typing now would go somewhere unknown")
+                    message: "the field refused both the value (\(describe(result))) and focus "
+                        + "(\(describe(focused))); typing now would go somewhere unknown")
             }
             typeText(text, pid: pid)
             mechanism = "CGEvent→pid"
@@ -1171,7 +1196,7 @@ func execute(_ request: [String: Any]) throws -> [String: Any] {
         guard choice < pool.count else { throw BridgeError(message: "option \(choice) is gone; re-observe") }
         let item = pool[choice]
         let result = AXUIElementPerformAction(item, kAXPressAction as CFString)
-        guard result == .success else { throw BridgeError(message: "select failed: AXError \(result.rawValue)") }
+        guard result == .success else { throw BridgeError(message: "select failed: \(describe(result))") }
         return ["ok": true, "detail": describe(item), "mechanism": "AXPress(option)"].merging(focusFacts(focusBefore, app)) { a, _ in a }
     default:
         throw BridgeError(message: "unknown operation \(op)")

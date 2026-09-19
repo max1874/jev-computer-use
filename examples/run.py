@@ -40,8 +40,16 @@ def main():
             # A tick that only decided (DONE, or a stale retry) adds no step.
             for step in state["history"][shown:]:
                 value = f' "{step["text"]}"' if step["text"] else ""
-                changed = "" if step["window_changed"] else "   (nothing changed)"
-                print(f'{step["elapsed_ms"]:>6} ms  {step["operation"]:<12} {step["label"]}{value}{changed}')
+                if step.get("outcome"):
+                    # A step that did not run cleanly says so, and says why. It
+                    # used to say nothing at all, because a refused operation
+                    # raised out of the run and took the printed history with it.
+                    note = f'   [{step["outcome"]}: {step.get("detail", "")}]'
+                elif step["window_changed"]:
+                    note = ""
+                else:
+                    note = "   (nothing changed)"
+                print(f'{step["elapsed_ms"]:>6} ms  {step["operation"]:<12} {step["label"]}{value}{note}')
             shown = len(state["history"])
         final = agent.state
         print(f'\n{final["status"]} after {len(final["history"])} operations, {final["elapsed_ms"]} ms')

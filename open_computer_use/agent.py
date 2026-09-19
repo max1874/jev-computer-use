@@ -154,6 +154,17 @@ class Agent:
                     "Pass pixels=True to let the model see a picture of it."
                 )
             elif self.pixels and state["page"]["sparse"]:
+                # Why this window was judged sparse, kept with the step that
+                # acted on it. The verdict is a boolean by the time the decision
+                # is made, so a run that reached for pixels on a window that
+                # looks perfectly ordinary afterwards leaves nothing to examine
+                # — and a window is only ordinary *afterwards*. Music did this:
+                # a CLICK_POINT on a window that measured 72 actionable
+                # elements every time it was asked later.
+                state["sparseness"] = {
+                    k: state["page"].get(k) for k in ("sparse", "actionable", "named", "coverage")
+                }
+                state["sparseness"]["text"] = len(state["page"].get("text") or "")
                 try:
                     capture = self.desktop.capture()
                 except BridgeError as error:
@@ -294,6 +305,51 @@ class Agent:
                         else f"{operation} may or may not have run. Check the window before running anything else."
                     )
                     return self.snapshot()
+                except BridgeError as error:
+                    # The bridge refused, and a refusal is a statement that
+                    # nothing ran — that is what separates this from the branch
+                    # above, and it is why the run can keep going. A control
+                    # that will not accept a press is ordinary: disabled,
+                    # covered, or a row that only answers to a double click.
+                    #
+                    # This used to propagate out of the generator. The traceback
+                    # took the whole run with it, including the steps that had
+                    # already succeeded, so a failure at step three left no
+                    # record that steps one and two had happened. An executor
+                    # that loses its history when one operation fails is not
+                    # observable, whatever it does when everything works.
+                    state["elapsed_ms"] = self._elapsed()
+                    state["history"].append(
+                        {
+                            "step": len(state["history"]) + 1,
+                            "operation": operation,
+                            "target": decision["target"],
+                            "label": action.get("label", operation) if action else operation,
+                            "text": text,
+                            "outcome": "failed",
+                            "detail": str(error),
+                            "risk": decision["risk"],
+                            # Nothing ran, so nothing changed. This is also what
+                            # feeds the stuck counter below: three refusals in a
+                            # row end the run instead of spinning on a control
+                            # that is never going to move.
+                            "window_changed": False,
+                            "elapsed_ms": state["elapsed_ms"],
+                        }
+                    )
+                    try:
+                        state["page"] = self.desktop.observe()
+                    except BridgeError as gone:
+                        state["history"][-1]["unobserved"] = str(gone)
+                        state["status"] = "blocked"
+                        return self.snapshot()
+                    state["elapsed_ms"] = self._elapsed()
+                    recent = state["history"][-3:]
+                    stuck = len(recent) == 3 and all(h.get("window_changed") is False for h in recent)
+                    state["status"] = "blocked" if stuck else "ready"
+                    if stuck:
+                        state["note"] = f"{operation} was refused: {error}"
+                    return self.snapshot()
             self.pending_text = None
             state["elapsed_ms"] = self._elapsed()
 
@@ -337,6 +393,10 @@ class Agent:
                 state["took_focus"] = True
             changed = state["page"]["fingerprint"] != before
             if decision.get("pixels") and self.capture:
+                # The measurement that unlocked this operation, kept on the step
+                # that used it. A pixel step is the one kind that has to justify
+                # itself after the fact.
+                state["history"][-1]["sparseness"] = state.get("sparseness")
                 # The tree of a window like this hardly moves whatever happens
                 # inside it, so the picture is what says whether the click
                 # landed. A click that changed nothing visible missed.
