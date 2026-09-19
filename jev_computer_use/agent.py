@@ -54,11 +54,19 @@ class Agent:
         # Screenshots are a fallback for windows that publish nothing, not a
         # default input. Set pixels=False to keep the run tree-only.
         #
-        # A real click goes through the window server, which has one cursor, so
-        # the pixel path only exists for an app that is in front. Offering it
-        # for a background window would be offering an operation that is
-        # guaranteed to be refused.
-        self.pixels = pixels and activate
+        # Looking and aiming are separate permissions. `screencapture` reads a
+        # window that is behind everything else, so photographing one costs the
+        # user nothing and needs no consent beyond `pixels`. Clicking a point
+        # in that picture is delivered through the window server, which has one
+        # cursor, so as sent here it needs the app in front — and that is what
+        # `activate` is consent for.
+        #
+        # They used to be one flag, and the cost was silent: a window whose
+        # tree says nothing could not be looked at without being raised, so a
+        # background run saw an empty table, had no picture, and said BLOCKED
+        # without ever having been shown the thing it was failing to describe.
+        self.pixels = pixels
+        self.pointer = pixels and activate
         self.activate = activate
         self.capture = None
         self.desktop = Desktop(app, menus=menus, activate=activate)
@@ -143,15 +151,23 @@ class Agent:
             if state["page"]["sparse"] and not self.pixels:
                 state["note"] = (
                     "This window publishes almost nothing to the accessibility tree. "
-                    "Pass activate=True to allow the screenshot fallback, which needs the app in front."
+                    "Pass pixels=True to let the model see a picture of it."
                 )
             elif self.pixels and state["page"]["sparse"]:
                 try:
                     capture = self.desktop.capture()
                 except BridgeError as error:
                     state["capture_error"] = str(error)
+                if capture and not self.pointer:
+                    state["note"] = (
+                        "This window publishes almost nothing to the accessibility tree, so the "
+                        "model is being shown a picture of it. Clicking a point in that picture "
+                        "needs the app in front; pass activate=True to allow it."
+                    )
             self.capture = capture
-            decision = choose(state["page"], state["goal"], state["history"], capture=capture)
+            decision = choose(
+                state["page"], state["goal"], state["history"], capture=capture, pointer=self.pointer
+            )
             state["decisions"].append(
                 {
                     **{k: v for k, v in decision.items() if k != "offered"},

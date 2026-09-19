@@ -30,9 +30,18 @@ window → indexed elements → operation + target → guarded execution → obs
   first version of this project concluded from real measurements that Electron
   apps publish nothing, and was wrong: the traversal stopped above the web
   content. A measurement is evidence about the pair, not about the app.
-- Do not take the screen on the tree path. `activate` is opt-in, and the pixel
-  fallback is gated behind it because a real click needs the app in front.
-  Keyboard events go to the process, never to the system.
+- Do not take the screen on the tree path. `activate` is opt-in. Keyboard
+  events go to the process, never to the system.
+- Looking and aiming are separate permissions. `pixels` photographs a window
+  that is behind everything else; `activate` is what offers the operations
+  aimed at that picture, because a click as delivered here needs the app in
+  front. Do not re-couple them.
+- Never activate an app to unlock a code path you are not going to execute.
+  Anything about what the model *would* choose — which operations are offered,
+  which point it names, how a prompt change lands — is `choose` on a background
+  capture, and costs the user nothing. Activating for that happened three times
+  in one session before it was written down here; each time the measurement
+  itself needed nothing but a picture.
 - Never widen the pixel path's guards. A click must be on a frontmost,
   unoccluded window. A click aimed at a covered window lands in someone else's
   — that happened here once, and the guard exists because of it.

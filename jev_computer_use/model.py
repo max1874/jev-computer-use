@@ -549,13 +549,18 @@ def ask_chat(state, operations, targets, capture):
     }
 
 
-def choose(page, goal, history, capture=None):
+def choose(page, goal, history, capture=None, pointer=False):
     """One request: the operation, a target for every operation, and a risk rating.
 
-    `capture` is a screenshot of the window, passed only when the tree is too
-    sparse to work from. It adds the pixel operations and costs an image.
+    `capture` is a screenshot of the window, passed when the tree is too sparse
+    to work from. `pointer` says whether the operations aimed at that picture
+    may be offered, and the two are separate on purpose. Photographing a window
+    needs nothing from the user — `screencapture` reads a window that is behind
+    everything else — while clicking a point in it, as delivered here, needs the
+    app in front. Tying them together meant a window could not be looked at
+    without being raised, and the looking is the half that costs nothing.
     """
-    elements, targets, controls = action_space(page, pixels=bool(capture))
+    elements, targets, controls = action_space(page, pixels=bool(capture) and pointer)
     operations = questions_for(targets, controls)
     state = {
         "goal": goal,
@@ -580,13 +585,24 @@ def choose(page, goal, history, capture=None):
         )
     if capture:
         state["screenshot"] = {
-            "why": "This window exposes almost nothing to the accessibility tree, so most of what "
-            "you can see in the picture has no element index. Prefer an indexed element when one "
-            "fits; fall back to CLICK_POINT only for what the table does not contain.",
+            "why": (
+                "This window exposes almost nothing to the accessibility tree, so most of what "
+                "you can see in the picture has no element index. Prefer an indexed element when "
+                "one fits; fall back to CLICK_POINT only for what the table does not contain."
+                if pointer
+                else "This window exposes almost nothing to the accessibility tree. The picture is "
+                "here to be read, not aimed at: nothing in it can be clicked, because clicking a "
+                "point needs the app in front and this run was not given permission to raise it. "
+                "Use it to understand what the few offered elements are, and to say BLOCKED with a "
+                "reason rather than guessing."
+            ),
             "width": capture["image_width"],
             "height": capture["image_height"],
-            "coordinates": "Top-left origin. click_x is 0 to width, click_y is 0 to height.",
         }
+        if pointer:
+            state["screenshot"]["coordinates"] = (
+                "Top-left origin. click_x is 0 to width, click_y is 0 to height."
+            )
     # Which backend answers is decided by whether the window can be described
     # in text at all. A System One model returns a choice, which is the whole
     # shape of this decision and the argument the README makes; it also takes

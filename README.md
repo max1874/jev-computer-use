@@ -283,14 +283,17 @@ So there is a second path, entered only when a window is sparse by measurement
 - The model **invents a coordinate** instead of selecting an index, so nothing
   can check the target before the click lands. This is the opposite of the idea
   the rest of the project is built on.
-- It **takes the screen, as implemented here**. The click is delivered through
-  the window server, which has one cursor, so this implementation requires the
-  app in front, really moves the pointer, and puts it back afterwards. That is
-  a property of how the click is sent, not something macOS has been shown to
-  require: keyboard events go to a process and reach a background window, and
-  whether a *mouse* event posted the same way can be made to land has not been
-  tested here. Until it is, `pixels` stays behind `activate=True`, and the
-  limitation is the delivery method rather than the platform.
+- **Clicking** it takes the screen, as implemented here. Seeing it does not.
+  `pixels=True` photographs the window and shows it to the model with the app
+  wherever it was; `activate=True` is what adds the operations aimed at that
+  picture, because the click is delivered through the window server, which has
+  one cursor. The two were one flag, and the cost of that was a window whose
+  tree says nothing could not be looked at without being raised.
+
+  The frontmost requirement belongs to how the click is sent, not to macOS:
+  keyboard events go to a process and reach a background window, and whether a
+  *mouse* event posted the same way can be made to land has not been tested
+  here. Until it is, the pointer stays behind `activate=True`.
 - It **sends your screen to the model.** The whole window, whatever is in it.
 - It **cannot be verified by the tree.** These windows' fingerprints barely
   move whatever happens inside them, so captures carry a 16×16 greyscale
