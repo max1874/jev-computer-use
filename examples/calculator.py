@@ -24,10 +24,20 @@ EXPECTED = "408"
 
 
 def clear(app):
-    """Start from a known display. The button is 'All Clear' only when it is already clear."""
-    desktop = Desktop(app)
+    """Start from a known display, and from a window that only shows this run.
+
+    Calculator keeps a visible tape of earlier calculations, and All Clear does
+    not clear it. Left alone it accumulates across runs until the window is
+    showing the expected answer before the agent has pressed anything — which
+    is the state this example is supposed to be proving the absence of. The
+    button is 'All Clear' only when the display is already clear.
+    """
+    desktop = Desktop(app, menus=True)
     try:
         page = desktop.observe()
+        if any(m["label"] == "View > Hide History" for m in page.get("menus", [])):
+            desktop.act({"operation": "MENU", "op": "MENU", "menu": "View > Hide History"}, page)
+            page = desktop.observe()
         button = next((e for e in page["elements"] if e["label"] in ("All Clear", "Clear")), None)
         if button:
             desktop.act({"operation": "PRESS", "op": "PRESS", "path": button["path"], "expect": "Clear"}, page)
@@ -47,9 +57,13 @@ def main():
     clear("Calculator")
 
     # The loop asks this before accepting DONE, so the model cannot declare
-    # victory over a display that does not say what it should.
+    # victory over a display that does not say what it should. Only the last
+    # line counts: anywhere in the window is not the same as on the display,
+    # and a check that accepts anywhere is one a leftover from the previous
+    # run can satisfy without this run doing anything at all.
     def reached(page):
-        return options.expect in page["text"].replace("‎", "")
+        lines = [line for line in page["text"].replace("‎", "").splitlines() if line.strip()]
+        return bool(lines) and options.expect in lines[-1]
 
     started = time.perf_counter()
     with Agent("Calculator", options.goal, verify=reached) as agent:

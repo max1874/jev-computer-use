@@ -13,7 +13,7 @@ import time
 
 import httpx
 
-from .questions import GUARD, NEXT_ACTION, TARGET, TEXT_VALUE
+from .questions import GUARD, GUARD_CHOICE, GUARD_LEVELS, NEXT_ACTION, TARGET, TEXT_VALUE
 
 CLIENT = httpx.Client(http2=True, timeout=60)
 
@@ -273,7 +273,22 @@ def object_format_instructions(properties):
     return "\n".join(lines)
 
 
-def reasoning_body(base_url):
+def names(needle, base_url, model):
+    """Whether the provider or the model is the one named.
+
+    Both of the checks below used to read the base URL alone, which is right
+    until the same model arrives through a gateway. `deepseek-v4.1-flash`
+    served from openrouter.ai is still DeepSeek and the URL no longer says so,
+    so both checks silently took the wrong branch and every run through that
+    gateway failed the same way: reasoning left on, the output budget spent on
+    it, the JSON truncated, "no parseable answer". That is the exact failure
+    the note in `reasoning_body` describes, arriving by the one route its own
+    check could not see.
+    """
+    return needle in (base_url or "").lower() or needle in (model or "").lower()
+
+
+def reasoning_body(base_url, model):
     """Turn extended thinking off where it is on by default.
 
     Picking an operation from an enumerated table is not a reasoning task, and
@@ -285,12 +300,14 @@ def reasoning_body(base_url):
     """
     if os.environ.get("DECISION_REASONING") == "default":
         return {}
-    if "deepseek" in base_url:
-        return {"thinking": {"type": "disabled"}}
+    if names("deepseek", base_url, model):
+        # Two spellings, because the gateway and the vendor disagree and
+        # sending the one the endpoint does not know is ignored, not refused.
+        return {"thinking": {"type": "disabled"}, "reasoning": {"enabled": False}}
     return {}
 
 
-def uses_json_schema(base_url):
+def uses_json_schema(base_url, model=""):
     """Whether this endpoint can constrain the answer server-side.
 
     `DECISION_RESPONSE_FORMAT` overrides the guess. DeepSeek, for one,
@@ -299,7 +316,7 @@ def uses_json_schema(base_url):
     override = os.environ.get("DECISION_RESPONSE_FORMAT")
     if override:
         return override == "json_schema"
-    return "deepseek" not in base_url
+    return not names("deepseek", base_url, model)
 
 
 def operation_distribution(payload, chosen, operations):
@@ -355,6 +372,128 @@ def user_content(state, capture):
     ]
 
 
+def jev_questions(operations, targets):
+    """The same heads, as named questions instead of fields of one JSON object.
+
+    The shape barely has to be translated, which is the point: this project's
+    decision was always an operation chosen from a set and one index chosen per
+    operation. Writing that as a schema and asking a chat model to fill it in
+    is a way of getting a choice out of something built to write prose. Here
+    the choice is what the endpoint returns.
+    """
+    questions = {
+        "operation": {"type": "choice", "instructions": NEXT_ACTION, "criteria": dict(operations)},
+        "risk": {"type": "score", "instructions": GUARD_CHOICE, "criteria": list(GUARD_LEVELS)},
+    }
+    for operation, candidates in targets.items():
+        questions[operation.lower() + "_target"] = {
+            "type": "choice",
+            "instructions": f"{TARGET}\n\nThe operation assumed by this answer is {operation}.",
+            # Criteria keys are JSON object keys and so are strings; the action
+            # space keys them by index, which is what they are turned back into.
+            "criteria": {str(key): candidate.get("label") for key, candidate in candidates.items()},
+        }
+    return questions
+
+
+def jev_reason(rating):
+    """The level a score mostly landed on, in the level's own words.
+
+    A backend that cannot write a sentence can still say which of the three
+    tiers it read the operation as, and that is all `risk_reason` ever was.
+    """
+    probabilities = rating.get("probabilities") or {}
+    if not probabilities:
+        return ""
+    top = max(probabilities, key=lambda level: probabilities[level])
+    return (rating.get("legend") or {}).get(top, "")
+
+
+def ask_jev(state, operations, targets):
+    """The System One backend: every head answered with a choice and a distribution.
+
+    Nothing here asks for JSON, because nothing here asks for writing. The
+    probabilities come back measured rather than reconstructed from token
+    logprobs, and the risk rating lands between its levels on its own instead
+    of a model picking a round number.
+
+    It takes text only, so the pixel path is not routed here — see `choose`.
+    """
+    base = os.environ.get("JEV_BASE_URL", "https://api.typesafe.ai/v1").rstrip("/")
+    key = os.environ.get("JEV_API_KEY")
+    body = {
+        "state": state,
+        "model": os.environ.get("JEV_MODEL", "jev-latest"),
+        "questions": jev_questions(operations, targets),
+    }
+    started = time.perf_counter()
+    payload = post_json(base + "/systemone", key, body)
+    latency = round((time.perf_counter() - started) * 1000)
+    answers = payload.get("answers") or {}
+    if not isinstance(answers, dict) or "operation" not in answers:
+        raise ValueError("The decision model returned no operation; no operation executed.")
+
+    picked = answers["operation"]
+    answer = {"operation": picked.get("choice"), "confidence": picked.get("confidence")}
+    for name, reply in answers.items():
+        if not name.endswith("_target"):
+            continue
+        candidates = targets.get(name[: -len("_target")].upper(), {})
+        by_text = {str(index): index for index in candidates}
+        answer[name] = by_text.get(reply.get("choice"), reply.get("choice"))
+
+    rating = answers.get("risk") or {}
+    if isinstance(rating.get("score"), (int, float)):
+        answer["risk"] = rating["score"] / max(1, len(GUARD_LEVELS) - 1)
+    answer["risk_reason"] = jev_reason(rating)
+    return {
+        "answer": answer,
+        "probabilities": picked.get("probabilities") or {},
+        "model": payload.get("model", body["model"]),
+        "usage": payload.get("usage", {}),
+        "latency_ms": latency,
+    }
+
+
+def ask_chat(state, operations, targets, capture):
+    """The OpenAI-compatible backend: one JSON object carrying every head."""
+    base = os.environ.get("DECISION_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    key = os.environ.get("DECISION_API_KEY")
+    if not key:
+        raise RuntimeError("Set DECISION_API_KEY (and DECISION_BASE_URL / DECISION_MODEL) before running.")
+    model = os.environ.get("DECISION_MODEL", "gpt-5.6")
+    properties = head_properties(operations, targets)
+    strict = uses_json_schema(base, model)
+    instructions = NEXT_ACTION if strict else NEXT_ACTION + "\n\n" + object_format_instructions(properties)
+    body = {
+        "model": model,
+        "temperature": 0,
+        "max_tokens": 700,
+        "logprobs": True,
+        "top_logprobs": 8,
+        "response_format": schema_format(properties) if strict else {"type": "json_object"},
+        **reasoning_body(base, model),
+        "messages": [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": user_content(state, capture)},
+        ],
+    }
+    started = time.perf_counter()
+    payload = post_json(base + "/chat/completions", key, body)
+    latency = round((time.perf_counter() - started) * 1000)
+    try:
+        answer = json.loads(payload["choices"][0]["message"]["content"])
+    except (KeyError, IndexError, ValueError):
+        raise ValueError("The decision model returned no parseable answer; no operation executed.") from None
+    return {
+        "answer": answer,
+        "probabilities": operation_distribution(payload, answer.get("operation"), operations),
+        "model": payload.get("model", body["model"]),
+        "usage": payload.get("usage", {}),
+        "latency_ms": latency,
+    }
+
+
 def choose(page, goal, history, capture=None):
     """One request: the operation, a target for every operation, and a risk rating.
 
@@ -393,33 +532,17 @@ def choose(page, goal, history, capture=None):
             "height": capture["image_height"],
             "coordinates": "Top-left origin. click_x is 0 to width, click_y is 0 to height.",
         }
-    base = os.environ.get("DECISION_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    key = os.environ.get("DECISION_API_KEY")
-    properties = head_properties(operations, targets)
-    strict = uses_json_schema(base)
-    instructions = NEXT_ACTION if strict else NEXT_ACTION + "\n\n" + object_format_instructions(properties)
-    body = {
-        "model": os.environ.get("DECISION_MODEL", "gpt-5.6"),
-        "temperature": 0,
-        "max_tokens": 700,
-        "logprobs": True,
-        "top_logprobs": 8,
-        "response_format": schema_format(properties) if strict else {"type": "json_object"},
-        **reasoning_body(base),
-        "messages": [
-            {"role": "system", "content": instructions},
-            {"role": "user", "content": user_content(state, capture)},
-        ],
-    }
-    if not key:
-        raise RuntimeError("Set DECISION_API_KEY (and DECISION_BASE_URL / DECISION_MODEL) before running.")
-    started = time.perf_counter()
-    payload = post_json(base + "/chat/completions", key, body)
-    latency = round((time.perf_counter() - started) * 1000)
-    try:
-        answer = json.loads(payload["choices"][0]["message"]["content"])
-    except (KeyError, IndexError, ValueError):
-        raise ValueError("The decision model returned no parseable answer; no operation executed.") from None
+    # Which backend answers is decided by whether the window can be described
+    # in text at all. A System One model returns a choice, which is the whole
+    # shape of this decision and the argument the README makes; it also takes
+    # text only. When the tree is too sparse to describe, the choice has to be
+    # read off a picture, and that goes to the multimodal backend instead — the
+    # one path where writing the answer out is the price of being able to see.
+    if capture or not os.environ.get("JEV_API_KEY"):
+        reply = ask_chat(state, operations, targets, capture)
+    else:
+        reply = ask_jev(state, operations, targets)
+    answer = reply["answer"]
 
     operation = answer.get("operation")
     if operation not in operations:
@@ -470,10 +593,10 @@ def choose(page, goal, history, capture=None):
         "confidence": max(0.0, min(1.0, float(answer.get("confidence") or 0))),
         "risk": max(0.0, min(1.0, float(risk))),
         "risk_reason": str(answer.get("risk_reason") or "")[:300],
-        "probabilities": operation_distribution(payload, operation, operations),
-        "model": payload.get("model", body["model"]),
-        "usage": payload.get("usage", {}),
-        "latency_ms": latency,
+        "probabilities": reply["probabilities"],
+        "model": reply["model"],
+        "usage": reply["usage"],
+        "latency_ms": reply["latency_ms"],
         "offered": {"operations": sorted(operations), "targets": {k: sorted(v) for k, v in targets.items()}},
     }
 
@@ -502,7 +625,7 @@ def field_text(context):
             "model": model,
             "max_tokens": 512,
             "response_format": {"type": "json_object"},
-            **reasoning_body(base),
+            **reasoning_body(base, model),
             "messages": [
                 {"role": "system", "content": TEXT_VALUE + ' Reply as {"text": "..."} or {"text": null}.'},
                 {"role": "user", "content": json.dumps(context, ensure_ascii=False)},

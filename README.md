@@ -106,7 +106,7 @@ call on the critical path; a rating in the same structured answer is free.
 git clone https://github.com/max1874/jev-computer-use.git
 cd jev-computer-use
 uv sync
-cp .env.example .env     # add DECISION_API_KEY
+cp .env.example .env     # add JEV_API_KEY, or DECISION_API_KEY, or both
 uv run jev-cu
 ```
 
@@ -118,19 +118,37 @@ Grant **Accessibility** to the terminal running this (System Settings > Privacy
 & Security > Accessibility). Nothing here needs Screen Recording, because
 nothing here takes a screenshot.
 
-Any OpenAI-compatible chat endpoint works. A provider that constrains the
-answer server-side (`json_schema`) is used in strict mode; a provider that only
-guarantees valid JSON gets the same shape spelled out in the prompt. Either
-way an answer outside the offered choices is refused and nothing runs, so the
-constraint is never the only thing standing between a model and your machine.
+There are two decision backends, and which one answers depends on whether the
+window can be described in text.
+
+**jev**, a System One model, answers a set of named questions — one choice of
+operation, one choice of index per operation, one score for the guard — and
+returns a probability distribution with each. Nothing is asked to write JSON,
+because nothing is asked to write. It takes text only and produces no text, so
+`TYPE_TEXT` values come from the text model below.
 
 ```bash
-DECISION_BASE_URL=https://api.deepseek.com/v1
-DECISION_MODEL=deepseek-flash      # V4.1-Flash: 1M context, logprobs, json_object
+JEV_BASE_URL=https://api.typesafe.ai/v1
+JEV_MODEL=jev-latest
 ```
 
-When the provider returns logprobs, the inspector draws the real distribution
-over the operation head; otherwise it shows the model's own confidence.
+**Any OpenAI-compatible chat endpoint**, used for every decision when
+`JEV_API_KEY` is unset, and for the screenshot fallback either way — a window
+with nothing in its tree has to be shown as a picture, which jev cannot take.
+A provider that constrains the answer server-side (`json_schema`) is used in
+strict mode; one that only guarantees valid JSON gets the same shape spelled
+out in the prompt.
+
+```bash
+DECISION_BASE_URL=https://openrouter.ai/api/v1
+DECISION_MODEL=deepseek/deepseek-v4.1-flash   # 1M context, logprobs, takes images
+```
+
+Either way an answer outside the offered choices is refused and nothing runs,
+so the constraint is never the only thing standing between a model and your
+machine. jev returns its distribution directly; a chat provider that returns
+logprobs gets one reconstructed from them, and one that returns neither shows
+the model's own confidence instead.
 
 ## Use the library
 
@@ -152,17 +170,24 @@ uv run python examples/electron.py --app Lark   # no model, no key: it only look
 ```
 
 ```text
-  1021 ms  PRESS  1                 model  812 ms   risk 0.00
-  1933 ms  PRESS  2                 model  752 ms   risk 0.00
-  3099 ms  PRESS  Multiply          model  979 ms   risk 0.00
-  4034 ms  PRESS  3                 model  767 ms   risk 0.00
-  4934 ms  PRESS  4                 model  714 ms   risk 0.00
-  6273 ms  PRESS  Equals            model 1112 ms   risk 0.00
+  1141 ms  PRESS  1               model 1000 ms   risk 0.01
+  1743 ms  PRESS  2               model  457 ms   risk 0.01
+  2369 ms  PRESS  Multiply        model  497 ms   risk 0.01
+  2998 ms  PRESS  3               model  497 ms   risk 0.01
+  3663 ms  PRESS  4               model  529 ms   risk 0.01
+  4356 ms  PRESS  Equals          model  540 ms   risk 0.01
 
-done after 6 operations, 7728 ms
+done after 6 operations, 5162 ms
+  7 model calls, 4133 ms of it waiting on the model (80% of the wall clock)
   display                         : '12×34\n408'
   the app never came to the front : True
 ```
+
+The first answer costs about twice what the rest do, because a connection is
+being made: on jev that held in all eight runs, between 1.9 and 2.6 times the
+median of the rest. The chat arm is noisier about it — 1.1 to 4.5 — but the
+typical run is worse, not better. It is the one number here that a warm process
+would not pay.
 
 `--activate` brings the app to the front. Without it nothing moves on your
 screen — the agent reads and presses a window you are not looking at. The one
@@ -314,31 +339,45 @@ accessibility reads, and those are where the time goes. It comes in within
 noise of a full snapshot on every window measured. A genuinely cheap staleness
 check would have to be a different question.
 
-With a real model, `deepseek-flash` over the public API, on
-`examples/calculator.py` — press `1`, `2`, `×`, `3`, `4`, `=` and then notice
-you are done:
+Both backends on the same task, `examples/calculator.py` — press `1`, `2`, `×`,
+`3`, `4`, `=` and then notice you are done — eight runs each, same machine,
+same hour, changing nothing but `JEV_API_KEY`:
 
-| | |
-|---|---|
-| correct result, verified by reading the display | **6 / 6 runs** |
-| operations per run | 6, every run |
-| task wall clock | **6.9 s** (median) |
-| decision latency | **744 ms** (median of 42 calls) |
-| share of wall clock spent waiting on the model | **78%** |
-| runs that brought the app to the front | **0** |
+| | jev | deepseek-v4.1-flash |
+|---|---|---|
+| correct result, verified by reading the display | **8 / 8 runs** | **8 / 8 runs** |
+| operations per run | 6, every run | 6, every run |
+| decision latency, median | **490 ms** | **2268 ms** |
+| decision latency, range | 460-552 ms | 1656-3598 ms |
+| task wall clock, median | **5.1 s** | **23.7 s** |
+| share of wall clock waiting on the model | 78% | 80% |
+| runs that brought the app to the front | 0 | 0 |
 
-Six runs is a small sample and it is worth saying what a small sample hides. An
-earlier version of this table said 4 of 4, and a later build that differed only
-by offering two more operations scored 1 of 8 — see "What is not offered". Four
-clean runs are not evidence that the next four will be clean.
+The accuracy columns are identical, so nothing here says one backend chooses
+better than the other on a task this size. What separates them is how long the
+answer takes, and one caveat has to be read alongside that number: the chat arm
+goes through OpenRouter, and an earlier measurement of the same model class
+against its vendor's own API was 744 ms. Most of the 4.6x is the gateway rather
+than the model, and against that 744 ms the honest figure is about 1.5x.
 
-**The harness is 43 ms per step. The model is 889 ms. Twenty to one.**
+Eight runs is a small sample and it is worth saying what a small sample hides.
+An earlier version of this table said 6 of 6 and one before it 4 of 4, and a
+build differing only by offering two more operations scored 1 of 8 - see "What
+is not offered". Those earlier numbers were also taken with a weaker check than
+this one: Calculator keeps a visible tape of previous calculations, and looking
+for the expected value anywhere in the window passed on a result left behind by
+the run before it. The check now reads the last line only, and the tape is
+hidden before the run starts.
 
-That gap is the whole argument for a System One model, and the reason
-jev-ultrafast runs on one. Nothing in this loop is waiting on macOS; it is
-waiting on a transformer generating a JSON object to say the word `PRESS`.
-Swap the decision call for a model that returns a choice instead of writing
-one out, and a six-press task stops being a seven-second task.
+**Four fifths of every run is spent waiting for the answer, on both backends.
+The macOS side of a whole step is 134 ms. The fastest answer measured here is
+490.**
+
+That is the argument for a System One model, and the reason jev-ultrafast runs
+on one. Nothing in this loop is waiting on macOS; it is waiting for a decision
+that was always a choice from a list. Asking for it as a choice rather than as
+a JSON object someone has to write out is worth the better part of a second
+every step, and it is the same six presses either way.
 
 `scripts/check_bridge.py` reproduces the accessibility half with no model calls
 at all.
@@ -444,12 +483,12 @@ guards, and the rule that the model chooses rather than generates. That project
 is by [Browser Use](https://github.com/browser-use) and runs on
 [TypeSafe's Jev](https://docs.typesafe.ai/introduction).
 
-This port uses an OpenAI-compatible model for the decision, so it runs without
-a Jev key. The decision call is a single structured answer over enumerated
-choices, which is exactly the shape a System One model takes — dropping Jev in
-behind `model.choose` is the obvious next step, and the text-value fallback in
-`model.field_text` is already there for a backend that chooses but cannot
-write.
+This port began on an OpenAI-compatible model, with the decision written as a
+single structured answer over enumerated choices — which is the shape a System
+One model takes, so Jev now sits behind `model.choose` and answers it directly.
+It still runs without a Jev key: leave `JEV_API_KEY` unset and every decision
+goes to the chat backend, which is also where the screenshot fallback goes
+either way, since Jev takes text only.
 
 The accessibility helpers follow `cu`, a macOS accessibility CLI, MIT.
 

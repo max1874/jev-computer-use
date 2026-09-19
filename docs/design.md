@@ -85,16 +85,32 @@ each available operation, the value for `TYPE_TEXT`, and the risk rating. Only
 the head matching the chosen operation can execute, so the rest cost a few
 output tokens and no extra round trip.
 
-Where the endpoint can constrain the answer server-side it is asked to. Where
-it can only guarantee valid JSON, the same shape goes in the prompt instead.
-Neither is load-bearing: an operation or target outside the offered choices is
-refused here, and nothing executes.
+A System One backend is asked for that directly: each head is a named question
+answered with a choice and a distribution over the options, and the risk rating
+is a score over three ordered levels rather than a number someone has to write
+down. Nothing is asked to produce JSON, because nothing is asked to produce
+text — which also means it cannot produce a `TYPE_TEXT` value, and that falls
+to `model.field_text`, or be shown a screenshot, which sends the sparse-window
+path to the chat backend instead.
+
+A chat backend is asked for the same thing as one JSON object. Where the
+endpoint can constrain the answer server-side it is asked to. Where it can only
+guarantee valid JSON, the same shape goes in the prompt instead. Neither is
+load-bearing: an operation or target outside the offered choices is refused
+here, and nothing executes.
 
 Extended thinking is turned off where it is on by default. Choosing from an
 enumerated table is not a reasoning task, and a model that thinks first spends
 its output budget doing it — one measured `deepseek-flash` answer was 417
 reasoning tokens against 13 tokens of JSON. On a real action space it is the
 JSON that gets truncated, and the run fails with nothing executed.
+
+Which provider that applies to is read from the model name as well as the base
+URL. It used to be read from the URL alone, which is correct until the same
+model arrives through a gateway: `deepseek-v4.1-flash` served from
+`openrouter.ai` is still DeepSeek, and every run through it failed in exactly
+the way the paragraph above describes, by the one route the check could not
+see.
 
 ## The guard
 
