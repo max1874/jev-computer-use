@@ -51,6 +51,10 @@ class Agent:
         # Without one, DONE is only ever the model's own claim.
         self.verify = verify
         self.pending_text = None
+        # (operation, path) pairs this app has refused on the window as it
+        # now stands. Cleared the moment the window changes, because a
+        # refusal is a fact about a state, not about a control.
+        self.refused = set()
         # Screenshots are a fallback for windows that publish nothing, not a
         # default input. Set pixels=False to keep the run tree-only.
         #
@@ -177,7 +181,12 @@ class Agent:
                     )
             self.capture = capture
             decision = choose(
-                state["page"], state["goal"], state["history"], capture=capture, pointer=self.pointer
+                state["page"],
+                state["goal"],
+                state["history"],
+                capture=capture,
+                pointer=self.pointer,
+                refused=self.refused,
             )
             state["decisions"].append(
                 {
@@ -328,6 +337,7 @@ class Agent:
                             "text": text,
                             "outcome": "failed",
                             "detail": str(error),
+                            "path": action.get("path") if action else None,
                             "risk": decision["risk"],
                             # Nothing ran, so nothing changed. This is also what
                             # feeds the stuck counter below: three refusals in a
@@ -337,12 +347,19 @@ class Agent:
                             "elapsed_ms": state["elapsed_ms"],
                         }
                     )
+                    if action and action.get("path"):
+                        self.refused.add((operation, action["path"]))
+                    before = page["fingerprint"]
                     try:
                         state["page"] = self.desktop.observe()
                     except BridgeError as gone:
                         state["history"][-1]["unobserved"] = str(gone)
                         state["status"] = "blocked"
                         return self.snapshot()
+                    # A refusal describes the window as it was. If the window has
+                    # moved on, it says nothing about what is there now.
+                    if state["page"]["fingerprint"] != before:
+                        self.refused.clear()
                     state["elapsed_ms"] = self._elapsed()
                     recent = state["history"][-3:]
                     stuck = len(recent) == 3 and all(h.get("window_changed") is False for h in recent)
@@ -392,6 +409,8 @@ class Agent:
             if result.get("took_focus"):
                 state["took_focus"] = True
             changed = state["page"]["fingerprint"] != before
+            if changed:
+                self.refused.clear()
             if decision.get("pixels") and self.capture:
                 # The measurement that unlocked this operation, kept on the step
                 # that used it. A pixel step is the one kind that has to justify

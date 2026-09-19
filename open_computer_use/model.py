@@ -115,13 +115,22 @@ def scaffolding(candidates):
     return drop
 
 
-def action_space(page, pixels=False):
+def action_space(page, pixels=False, refused=()):
     """One index per element; each operation carries only the targets it can use.
 
     Returns the table shown to the model, the per-operation target maps, and the
     targetless controls. `pixels` adds the screenshot operations, which are
     offered only when the tree has too little in it to work from.
+
+    `refused` is (operation, path) pairs the app turned down since the window
+    last changed, and they are not offered again. Telling the model that a
+    press was refused is not enough: on Music it chose the same button three
+    times in a row with "outcome: failed" sitting in its history each time, and
+    the run ended blocked having done nothing. A control the app has just
+    refused is the one choice that is known to be wrong, and the cheapest place
+    to act on that is the table, not the prompt.
     """
+    refused = set(refused)
     usable = [
         source
         for source in page["elements"]
@@ -134,7 +143,12 @@ def action_space(page, pixels=False):
     for source in usable:
         if source["path"] in wrappers:
             continue
-        operations = [op for op in source["operations"] if op in TARGETED]
+        operations = [
+            op for op in source["operations"] if op in TARGETED and (op, source["path"]) not in refused
+        ]
+        # Every operation on it has just been refused, so it is not a choice.
+        if not operations and source["role"] != "AXTextArea":
+            continue
         index = source["index"]
         shown = {"index": index, "role": source["role"].removeprefix("AX")}
         # No invented label. Writing the role into the label field turned a
@@ -563,7 +577,7 @@ def past_action(step):
     return row
 
 
-def choose(page, goal, history, capture=None, pointer=False):
+def choose(page, goal, history, capture=None, pointer=False, refused=()):
     """One request: the operation, a target for every operation, and a risk rating.
 
     `capture` is a screenshot of the window, passed when the tree is too sparse
@@ -573,8 +587,12 @@ def choose(page, goal, history, capture=None, pointer=False):
     everything else — while clicking a point in it, as delivered here, needs the
     app in front. Tying them together meant a window could not be looked at
     without being raised, and the looking is the half that costs nothing.
+
+    `refused` is (operation, path) pairs the app has turned down on this window
+    since it last changed. They are dropped from the table rather than argued
+    about in the prompt.
     """
-    elements, targets, controls = action_space(page, pixels=bool(capture) and pointer)
+    elements, targets, controls = action_space(page, pixels=bool(capture) and pointer, refused=refused)
     operations = questions_for(targets, controls)
     state = {
         "goal": goal,
