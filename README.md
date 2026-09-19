@@ -457,8 +457,25 @@ Known limits:
 - Apps that publish a poor accessibility tree cannot be driven well. Before
   concluding that an app is one of them, check that the walk is reaching its
   content: that mistake is the subject of "When the window says nothing" above.
-- `SELECT` needs a pop-up button that exposes its menu while closed; many do
-  not, and then only `PRESS` is offered.
+- **`SELECT` is implemented and has never been offered.** It enumerates a
+  pop-up button's options from its accessibility children, and a target set
+  that comes out empty removes the operation from that element. Every pop-up
+  and menu button open on this machine was counted once: **40 of them across
+  Finder, Music, OrbStack, ChatGPT and Chrome, and 0 exposed a single menu
+  item.** Seven had children at all, and those children were the button's own
+  face — `AXImage`, `AXStaticText` — never an `AXMenuItem`. So the operation
+  has no targets anywhere, and `PRESS` is what gets offered on those elements
+  instead. All 40 advertise `AXShowMenu`, and pressing does open the menu; what
+  is missing is reading it afterwards, because an open menu is its own window
+  and the snapshot reads the focused one. That is the same gap that keeps
+  `AXShowMenu` out of the action space, and closing it would revive both.
+  Two things this measurement does not say. It does not say the reader is
+  wrong: it already unwraps the classic AppKit shape, a lone `AXMenu` child
+  whose children are the items. And it does not explain the emptiness, because
+  36 of the 40 were web-view buttons and the other 4 were native toolbar
+  `AXMenuButton`s — not one classic `NSPopUpButton` was on screen, so whether
+  one of those would publish its items while closed is untested here. What is
+  measured is the count.
 - The risk rating is a model's judgement, not a policy engine. It is a gate on
   obvious harm, not a guarantee.
 - **An editable field is not always a place to write prose.** A Finder window

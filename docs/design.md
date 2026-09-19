@@ -155,6 +155,17 @@ tree, forms in it read and write, and the earlier claim came from the same
 traversal limit that made Electron apps look empty. What a browser needs beyond
 that — tabs, navigation, more than one page — is what is missing.
 
+An open menu is its own window, and the snapshot reads the focused one, so
+nothing here can see a menu while it is open. Two things sit behind that.
+`AXShowMenu` is not in the action space, and `SELECT` — which needs a pop-up
+button's menu items and reads them as accessibility children — has never been
+offered: of 40 pop-up and menu buttons counted across five running apps, none
+exposed a menu item while closed, so the target set is always empty and the
+operation removes itself. `PRESS` is offered on those elements instead and does
+open the menu; what follows is unreadable. Why they are empty is not
+established — the 40 were web-view and toolbar buttons, with no classic
+`NSPopUpButton` among them.
+
 Menu items whose titles change with document state kept reporting their old
 title for seconds after the state changed, so state-dependent menu commands are
 not reliable.

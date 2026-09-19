@@ -20,6 +20,15 @@ window → indexed elements → operation + target → guarded execution → obs
   — two lines, correct, silent — took the calculator task from 6 of 6 runs to
   1 of 8. Measure a new operation against a task that does not use it before
   offering it, not only against one that does.
+- Before improving an operation, count how often it is offered. `SELECT` was
+  about to get a post-execution read-back when the count came in: of 40 pop-up
+  and menu buttons open across five apps, 0 exposed a menu item, so it is
+  offered zero times and the read-back would have run never. Count first, then
+  explain — the first version of this note blamed AppKit, and the sample turned
+  out to contain no AppKit pop-up at all. The code is inert rather than costly — an
+  element with no options drops `SELECT` from its own operation list, and an
+  operation with no targets is never put to the model — so this is a thing to
+  measure before working on, not a thing to delete.
 - A local change measured globally is not measured. Averaging a whole window
   divided every real change by the unchanged majority around it, so pressing a
   digit scored 0.30 against a threshold of 2 and a third of a window changing
