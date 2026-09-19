@@ -169,11 +169,14 @@ def thumbnail_difference(before, after):
     something 2.25 to 4.62 depending on what it held, an 85-point square at
     reading contrast 7.50. Repeated presses give the same score to two decimals.
 
-    Not measured: a hover highlight under the pointer, which arithmetic puts
-    near 2 on a wide list row. Measuring it means taking the mouse away from
-    whoever is using the machine. It is the one case where this is more willing
-    than the average was, and the score is recorded on every step so a wrong
-    call can be read back off the history rather than guessed at.
+    The hover highlight under the pointer was the one case arithmetic put near
+    the threshold, and it does not arise. `clickImagePoint` moves the pointer
+    back before it returns, and the second capture is taken after that and
+    after the settle, so the highlight is gone by the time anything is
+    compared. Measured rather than assumed: four real clicks on empty space in
+    a Linear window — pointer really moved there, button really pressed —
+    score 0.00, and clicking a tab in that same window scores 2.50. The
+    whole-window average scores that same tab click 0.41 and calls it nothing.
     """
     if not before or not after or len(before) != len(after):
         return None
@@ -313,7 +316,7 @@ class Desktop:
             request["option"] = action["option"]
         if "key" in action:
             request["key"] = action["key"]
-        for field in ("x", "y", "scale"):
+        for field in ("x", "y", "scale", "window_id", "window_size"):
             if field in action:
                 request[field] = action[field]
         if text is not None:

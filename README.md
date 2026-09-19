@@ -273,12 +273,20 @@ So there is a second path, entered only when a window is sparse by measurement
   digit at 0.30 and a third of a window changing at 1.88, both under a
   threshold of 2 and both therefore recorded as nothing happening. Scoring
   sixteenths of the window and taking the loudest separates cleanly — 0.00 to
-  0.19 when nothing happened, 2.25 and up when something did.
+  0.19 when nothing happened, 2.25 and up when something did. On the path
+  itself, in Linear: four real clicks on empty space score 0.00, and clicking
+  a tab scores 2.50 against the whole-window average's 0.41.
 
-Two guards stand in front of it. The app must be frontmost, and the point must
+Three guards stand in front of it. The app must be frontmost. The point must
 not be occluded — the window list is ordered front to back, so the code can ask
 what a click at that point would actually hit. That guard exists because during
 development a click aimed at Calculator landed in a browser window covering it.
+And the window must still be the one in the picture, at the size it was: a
+point means nothing except in the picture it was named in, so the capture's
+window id and size ride along with it and a window resized in between is
+refused. The bridge always had that check. Nothing sent it the window's
+identity until it was tested, so for its whole life it could not fire — a
+stale click went through and landed where the arithmetic happened to put it.
 
 ## Evidence and limits
 
@@ -386,12 +394,17 @@ Known limits:
   For web pages use [browser-harness](https://github.com/browser-use/browser-harness)
   or [jev-ultrafast](https://github.com/browser-use/jev-ultrafast); this is for
   native apps.
-- **The pixel fallback has been verified on Calculator, not on a real sparse
-  app.** Driving it through HID clicks works (7 × 3 = 21, by coordinate), the
-  occlusion and frontmost guards refuse correctly, and the capture round-trips
-  to the right screen point. Whether a model can reliably pick coordinates in a
-  dense interface is untested. Since the depth fix the fallback also fires far
-  less often than it was built to, which means it gets far less exercise.
+- **The pixel fallback's mechanism is verified; its judgement is not.** A whole
+  run now goes through it on Linear, which publishes three elements and no text
+  at all: capture, coordinate, HID click, and the change read back off the
+  picture, both when the click changed something and when it did not. The
+  frontmost guard refuses correctly, including mid-run when another app takes
+  the screen. What that run does not test is the part that matters most —
+  whether a **model** can reliably pick coordinates in a dense interface. The
+  decision came from `scripts/mock_model.py`, which picks the point named in
+  the goal and proves the plumbing and nothing else. Since the depth fix the
+  fallback also fires far less often than it was built to, which means it gets
+  far less exercise.
 - One window at a time: the focused window of one app. No sheets belonging to
   other windows, no multi-app workflows, no drag, no canvas, no web views.
 - Apps that publish a poor accessibility tree cannot be driven well. Before

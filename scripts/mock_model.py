@@ -5,7 +5,10 @@ It speaks just enough of the OpenAI chat-completions shape to answer the
 request the agent actually sends: it reads the response schema, fills every
 head with a valid choice, and picks the operation from the state by a rule a
 model would learn. It has no intelligence and proves none — it proves the
-transport, the schema, the target heads, the guard, and the execution path.
+transport, the schema, the target heads, the guard, and the execution path,
+including the pixel path, which a window with nothing in its tree is the only
+way to reach and which therefore went unexercised for as long as this could
+only answer with an index.
 
     python3 scripts/mock_model.py --port 8799
 """
@@ -41,16 +44,33 @@ def decide(state, properties):
     else:
         quoted = goal
 
+    clicked = [action for action in state.get("recent_actions", []) if action.get("operation") == "CLICK_POINT"]
+
     if not done and "TYPE_TEXT" in offered and "type_text_target" in properties:
         answer["operation"] = "TYPE_TEXT"
         # The largest editable element: the document body rather than a toolbar field.
         editable = [e for e in state["elements"] if "TYPE_TEXT" in e["operations"]]
         answer["type_text_target"] = editable[0]["index"] if editable else properties["type_text_target"]["enum"][0]
         answer["type_text_value"] = quoted
+    elif not clicked and "CLICK_POINT" in offered and "click_x" in properties:
+        # The pixel path, which is offered only when the window publishes too
+        # little to choose an index from. There is no index to pick, so the
+        # answer is a coordinate — the one place this stand-in is asked for a
+        # number rather than a choice, and the one path that cannot be reached
+        # at all without it. A point written into the goal is used as given;
+        # otherwise the middle of the picture, which exercises the round trip
+        # without pretending to know where anything in the window is.
+        answer["operation"] = "CLICK_POINT"
+        shot = state.get("screenshot") or {}
+        named = POINT.search(goal)
+        answer["click_x"] = float(named.group(1)) if named else (shot.get("width") or 2) / 2
+        answer["click_y"] = float(named.group(2)) if named else (shot.get("height") or 2) / 2
     else:
         answer["operation"] = "DONE"
     return answer
 
+
+POINT = re.compile(r"(\d+)\s*,\s*(\d+)")
 
 ENUM_LINE = re.compile(r'^- "([a-z_]+)": exactly one of (\[.*\])$', re.MULTILINE)
 
@@ -74,10 +94,27 @@ def properties_from(body):
     return properties
 
 
+def text_part(content):
+    """The observed state, whether or not a picture came with it.
+
+    A request carrying a screenshot sends content as a list of parts rather
+    than a string, which is the shape every pixel-path request has. Reading it
+    as a string raised a TypeError inside the handler and closed the
+    connection, so the one path that can only be reached with a picture was
+    also the one path this could never answer.
+    """
+    if isinstance(content, str):
+        return content
+    for part in content:
+        if part.get("type") == "text":
+            return part["text"]
+    raise ValueError("no text part in the message content")
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        state = json.loads(body["messages"][-1]["content"])
+        state = json.loads(text_part(body["messages"][-1]["content"]))
         properties = properties_from(body)
         answer = decide(state, properties)
         payload = {

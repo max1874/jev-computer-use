@@ -50,4 +50,6 @@ Build: `scripts/build.sh`.
 Accessibility checks, no model calls: `python3 scripts/check_bridge.py`
 (add `--foreground` for the menu-bar checks).
 Whole loop offline: run `scripts/mock_model.py`, point `DECISION_BASE_URL` at
-it, then `examples/textedit.py`.
+it, then `examples/textedit.py`. It answers the pixel path too, against any
+window whose tree is empty enough to trigger it — the only way to exercise
+that path without a paid model, and the reason to keep it able to.

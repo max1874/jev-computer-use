@@ -442,7 +442,19 @@ def choose(page, goal, history, capture=None):
                 raise ValueError(f"CLICK_POINT {x},{y} is outside the {width}x{height} capture; nothing executed.")
             # The scale travels with the capture the point was named in, so a
             # stale screenshot cannot be turned into a click somewhere else.
-            action.update(x=float(x), y=float(y), scale=capture["scale"], label=f"point {int(x)},{int(y)}")
+            # The window's identity and size travel with it too, because the
+            # scale alone is not enough: a window that was resized between the
+            # picture and the click maps the same point somewhere else, and the
+            # click would land by coincidence. The bridge has always refused
+            # that; until this it was never given what it needed to notice.
+            action.update(
+                x=float(x),
+                y=float(y),
+                scale=capture["scale"],
+                window_id=capture["window_id"],
+                window_size=capture["window_size"],
+                label=f"point {int(x)},{int(y)}",
+            )
         elif operation == "TYPE_KEYS":
             action["label"] = "focused field"
 
